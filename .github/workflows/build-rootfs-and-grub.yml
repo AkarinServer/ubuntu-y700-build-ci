@@ -123,7 +123,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             debootstrap dosfstools mtools e2fsprogs rsync curl unzip tar xz-utils zstd p7zip-full \
-            gdisk qemu-utils sudo ca-certificates gnupg binutils \
+            gdisk qemu-utils sudo ca-certificates gnupg binutils git make bc bison flex \
+            libssl-dev libelf-dev dwarves device-tree-compiler \
             meson ninja-build pkg-config protobuf-c-compiler gcc-aarch64-linux-gnu \
             libglib2.0-dev:arm64 libqmi-glib-dev:arm64 libgudev-1.0-dev:arm64 libpolkit-gobject-1-dev:arm64 libprotobuf-c-dev:arm64
 
@@ -210,6 +211,11 @@ jobs:
           KEEP_BOOT_IMAGE=0
           CONFIG_EOF
           cat > "$RUNNER_TEMP/source.env" <<'CONFIG_EOF'
+          BUILD_Y700_KERNEL=1
+          KERNEL_SOURCE_REPOSITORY=https://github.com/GUF296/linux.git
+          KERNEL_SOURCE_REF=5df8e852ea722929f5359a5ef28ebcec0c4443fd
+          KERNEL_BUILD_JOBS=4
+          KERNEL_BASE_CONFIG_ARCHIVE=
           KERNEL_ARTIFACT_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-kernel-artifacts-7.1.1-g5df8e852ea72.tar.gz
           BOOTAA64_EFI_URL=
           QCOMRAMP_EFI_URL=
@@ -330,6 +336,26 @@ jobs:
             bash scripts/ci/build-y700-sensor-debs.sh
           echo 'Y700_SENSOR_DEB_DIR=out/y700-sensor-debs' >> "$GITHUB_ENV"
 
+      - name: Build Snap-capable kernel artifacts
+        run: |
+          set -euo pipefail
+          if [ "${BUILD_Y700_KERNEL:-0}" != "1" ]; then
+            echo 'BUILD_Y700_KERNEL is not 1; using KERNEL_ARTIFACT_ARCHIVE unchanged.'
+            echo 'Y700_KERNEL_ARTIFACT_ARCHIVE=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          env \
+            OUTPUT_DIR=out/y700-kernel-artifacts \
+            KERNEL_SOURCE_REPOSITORY="$KERNEL_SOURCE_REPOSITORY" \
+            KERNEL_SOURCE_REF="$KERNEL_SOURCE_REF" \
+            KERNEL_BUILD_JOBS="$KERNEL_BUILD_JOBS" \
+            KERNEL_BASE_CONFIG_ARCHIVE="${KERNEL_BASE_CONFIG_ARCHIVE:-$KERNEL_ARTIFACT_ARCHIVE}" \
+            DTB_NAME="$DTB_NAME" \
+            bash scripts/ci/build-y700-kernel-artifacts.sh
+          kernel_archive=$(find out/y700-kernel-artifacts -maxdepth 1 -type f -name 'y700-kernel-artifacts-*-snap.tar.gz' -print -quit)
+          test -n "$kernel_archive"
+          echo "Y700_KERNEL_ARTIFACT_ARCHIVE=$kernel_archive" >> "$GITHUB_ENV"
+
       - name: Build source haptics deb
         run: |
           set -euo pipefail
@@ -413,7 +439,7 @@ jobs:
             BOOT_FAT_LABEL="$BOOT_FAT_LABEL" \
             BOOT_SECTOR_SIZE="$BOOT_SECTOR_SIZE" \
             BOOT_CLUSTER_SECTORS="$BOOT_CLUSTER_SECTORS" \
-            KERNEL_ARTIFACT_ARCHIVE="$KERNEL_ARTIFACT_ARCHIVE" \
+            KERNEL_ARTIFACT_ARCHIVE="${Y700_KERNEL_ARTIFACT_ARCHIVE:-$KERNEL_ARTIFACT_ARCHIVE}" \
             BOOTAA64_EFI_URL="$BOOTAA64_EFI_URL" \
             QCOMRAMP_EFI_URL="$QCOMRAMP_EFI_URL" \
             QCOMRAMP_CFG_NAME="$QCOMRAMP_CFG_NAME" \
@@ -444,6 +470,9 @@ jobs:
           if [ -d out/tb321fu-camera-stack-debs ]; then
             checksum_dirs+=(out/tb321fu-camera-stack-debs)
           fi
+          if [ -d out/y700-kernel-artifacts ]; then
+            checksum_dirs+=(out/y700-kernel-artifacts)
+          fi
           find "${checksum_dirs[@]}" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > out/ci-release/SHA256SUMS.txt
 
       - name: Upload workflow artifacts
@@ -456,6 +485,7 @@ jobs:
             out/y700-sensor-debs/*
             out/tb321fu-haptics-debs/*
             out/tb321fu-camera-stack-debs/*
+            out/y700-kernel-artifacts/*
             out/ci-release/SHA256SUMS.txt
 
       - name: Upload release assets

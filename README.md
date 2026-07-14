@@ -55,8 +55,8 @@ REBUILD_TB321FU_CAMERA_GNOME_PLUGIN=1
 CAMERA_PIPEWIRE_VERSION=1.6.2
 OVERLAY_ARCHIVE=
 DEB_ARCHIVE=
-SENSOR_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-sensor-debs/releases/download/tb321fu-sensor-debs-20260626.1/tb321fu-sensor-debs_20260626.1_arm64.tar.gz
-HAPTICS_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-haptics-debs/releases/download/tb321fu-haptics-debs-20260627.1/tb321fu-haptics-debs_20260627.1_arm64.tar.gz
+SENSOR_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-sensor-debs/releases/download/tb321fu-sensor-debs-20260627.1/tb321fu-sensor-debs_20260627.1_arm64.tar.gz
+HAPTICS_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-haptics-debs/releases/download/tb321fu-haptics-debs-20260627.2/tb321fu-haptics-debs_20260627.2_arm64.tar.gz
 CLEAN_APT_CACHE=1
 COMPRESS=7z
 CHUNK_SIZE=
@@ -89,6 +89,11 @@ KEEP_BOOT_IMAGE=0
 Optional override example:
 
 ```text
+BUILD_Y700_KERNEL=1
+KERNEL_SOURCE_REPOSITORY=https://github.com/GUF296/linux.git
+KERNEL_SOURCE_REF=5df8e852ea722929f5359a5ef28ebcec0c4443fd
+KERNEL_BUILD_JOBS=4
+KERNEL_BASE_CONFIG_ARCHIVE=
 KERNEL_ARTIFACT_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-kernel-artifacts-7.1.1-g5df8e852ea72.tar.gz
 BOOTAA64_EFI_URL=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/BOOTAA64.EFI
 QCOMRAMP_EFI_URL=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/QCOMRAMP-CONFIGFILE.EFI
@@ -100,6 +105,7 @@ DTB_NAME=sm8650-lenovo-tb321fu.dtb
 ## Scripts
 
 - `scripts/ci/build-rootfs-image.sh`: builds an ext4 rootfs image from debootstrap plus declared overlays/debs.
+- `scripts/ci/build-y700-kernel-artifacts.sh`: rebuilds the verified TB321FU kernel commit with AppArmor and SquashFS XZ support for Snap.
 - `scripts/ci/build-grub-image.sh`: builds a FAT boot image containing BOOTAA64.EFI, a prebuilt or generated QCOMRAMP.EFI, Image, DTB and GRUB config.
 - `scripts/ci/build-tb321fu-camera-stack-deb.sh`: builds the live-verified TB321FU camera stack deb from `source/tb321fu-camera-rootfs-overlay` or an explicit camera overlay archive.
 - `scripts/ci/pack-disk-image.sh`: optional GPT disk image packer for a FAT boot image plus ext4 rootfs image.
@@ -126,7 +132,9 @@ New releases created by the workflow are normal GitHub Releases, not prereleases
 
 The default rootfs uses the Ubuntu GNOME session with GDM and enables Snap support through `snapd`, AppArmor, GNOME Software, and the GNOME Software Snap plugin. Snap applications are installed after the device boots; the rootfs builder does not attempt to run the Snap daemon inside the provisioning chroot.
 
-The current bootstrap kernel artifact has loop devices, SquashFS, namespaces, seccomp, and cgroups enabled, but its published `kernel.config` has AppArmor and SquashFS XZ decompression disabled. `snapd` can therefore be installed and started, but strict confinement is not considered verified for that kernel. A production Snap image should replace `KERNEL_ARTIFACT_ARCHIVE` with a matching Y700 kernel built with `CONFIG_SECURITY_APPARMOR=y` and `CONFIG_SQUASHFS_XZ=y`.
+The bootstrap kernel artifact supplies the verified TB321FU base configuration. By default, the workflow fetches the exact matching public source commit from `GUF296/linux`, enables `CONFIG_SECURITY_APPARMOR=y` and `CONFIG_SQUASHFS_XZ=y`, adds `apparmor` to `CONFIG_LSM`, and rebuilds `Image` plus the TB321FU DTB. GRUB is then packaged with this rebuilt kernel instead of the bootstrap binary. The kernel archive and its checksums are included in the Actions artifact.
+
+Set `BUILD_Y700_KERNEL=0` in `source_config` only when intentionally supplying a replacement `KERNEL_ARTIFACT_ARCHIVE` that already has the required Snap kernel features.
 
 The rootfs builder removes KDE-only KWin, Plasma Keyboard, and Plasma workspace configuration after all external device debs are installed. The KDE-only KSystemStats GPU plugin is disabled for GNOME builds.
 
