@@ -539,6 +539,7 @@ meson setup "$build" "$src" \
   -Dexamples=disabled \
   -Dtests=disabled \
   -Dinstalled_tests=disabled \
+  -Ddbus=disabled \
   -Dgstreamer=disabled \
   -Dpipewire-alsa=disabled \
   -Dpipewire-jack=disabled \
