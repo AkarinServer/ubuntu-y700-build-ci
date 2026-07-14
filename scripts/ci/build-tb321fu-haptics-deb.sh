@@ -399,19 +399,6 @@ EOF_UDEV
   chmod 0644 "$dest"
 }
 
-write_plasma_keyboard_default() {
-  local dest=$1
-
-  cat > "$dest" <<'EOF_CONF'
-[General]
-enabledLocales=en_US
-soundEnabled=true
-vibrationEnabled=true
-vibrationMs=20
-EOF_CONF
-  chmod 0644 "$dest"
-}
-
 strip_if_requested() {
   [ "$HAPTICS_STRIP" = 1 ] || return 0
   aarch64-linux-gnu-strip --strip-unneeded "$@"
@@ -444,7 +431,6 @@ EOF_MAKE
     "$pkg/usr/libexec/tb321fu-haptics" \
     "$pkg/usr/lib/systemd/system" \
     "$pkg/usr/lib/udev/rules.d" \
-    "$pkg/etc/skel/.config" \
     "$pkg/usr/bin"
 
   install -m 0644 "$module" "$pkg/usr/lib/modules/$kernel_release/extra/aw86937-haptics.ko"
@@ -453,7 +439,6 @@ EOF_MAKE
   write_bind_script "$pkg/usr/libexec/tb321fu-haptics/bind-aw86937"
   write_systemd_unit "$pkg/usr/lib/systemd/system/tb321fu-haptics.service"
   write_udev_rules "$pkg/usr/lib/udev/rules.d/90-tb321fu-haptics.rules"
-  write_plasma_keyboard_default "$pkg/etc/skel/.config/plasmakeyboardrc"
 
   if [ -f "$helper_src" ]; then
     aarch64-linux-gnu-gcc -O2 -Wall -Wextra -o "$pkg/usr/bin/tb321fu-haptic-test" "$helper_src"

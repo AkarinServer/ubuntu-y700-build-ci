@@ -10,7 +10,7 @@ Primary workflow:
 
 - `.github/workflows/build-rootfs-and-grub.yml`
 
-The workflow exposes common dispatch inputs directly in the GitHub Actions UI, including output prefix, Ubuntu mirror, image sizes, rootfs labels, default user settings, sudo mode, and optional SDDM autologin.
+The workflow exposes common dispatch inputs directly in the GitHub Actions UI, including output prefix, Ubuntu mirror, image sizes, rootfs labels, default user settings, sudo mode, and optional GDM autologin.
 
 It also keeps three optional advanced override inputs:
 
@@ -27,10 +27,10 @@ Leave the advanced override inputs empty for the built-in verified defaults. If 
 Optional override example:
 
 ```text
-DISTRO=noble
+DISTRO=resolute
 ARCH=arm64
 MIRROR=http://ports.ubuntu.com/ubuntu-ports
-ROOTFS_IMAGE_SIZE=14G
+ROOTFS_IMAGE_SIZE=20G
 ROOTFS_UUID=
 ROOTFS_LABEL=Ubuntu
 ROOTFS_PARTLABEL=userdata
@@ -40,15 +40,19 @@ DEFAULT_USER_PASSWORD=1234
 ROOT_PASSWORD_MODE=locked
 ROOT_PASSWORD=
 USER_SUDO_MODE=password
-SDDM_AUTOLOGIN=0
-SDDM_AUTOLOGIN_SESSION=plasma
+DESKTOP_FLAVOR=gnome
+DISPLAY_MANAGER=gdm3
+DESKTOP_AUTOLOGIN=0
+DESKTOP_SESSION=ubuntu
 TZ_REGION=Asia/Shanghai
 LANG_NAME=zh_CN.UTF-8
 PACKAGE_LIST=
-DESKTOP_ENV=plasma-desktop
+DESKTOP_ENV=ubuntu-desktop-minimal
 INSTALL_FIREFOX=1
-INSTALL_FCITX5_CHINESE=1
-DISABLE_SNAPD=1
+INSTALL_IBUS_CHINESE=1
+DISABLE_SNAPD=0
+REBUILD_TB321FU_CAMERA_GNOME_PLUGIN=1
+CAMERA_PIPEWIRE_VERSION=1.6.2
 OVERLAY_ARCHIVE=
 DEB_ARCHIVE=
 SENSOR_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-sensor-debs/releases/download/tb321fu-sensor-debs-20260626.1/tb321fu-sensor-debs_20260626.1_arm64.tar.gz
@@ -118,16 +122,27 @@ The release notes include the rootfs, boot and source config used for that build
 
 New releases created by the workflow are normal GitHub Releases, not prereleases.
 
+## GNOME And Snap
+
+The default rootfs uses the Ubuntu GNOME session with GDM and enables Snap support through `snapd`, AppArmor, GNOME Software, and the GNOME Software Snap plugin. Snap applications are installed after the device boots; the rootfs builder does not attempt to run the Snap daemon inside the provisioning chroot.
+
+The current bootstrap kernel artifact has loop devices, SquashFS, namespaces, seccomp, and cgroups enabled, but its published `kernel.config` has AppArmor and SquashFS XZ decompression disabled. `snapd` can therefore be installed and started, but strict confinement is not considered verified for that kernel. A production Snap image should replace `KERNEL_ARTIFACT_ARCHIVE` with a matching Y700 kernel built with `CONFIG_SECURITY_APPARMOR=y` and `CONFIG_SQUASHFS_XZ=y`.
+
+The rootfs builder removes KDE-only KWin, Plasma Keyboard, and Plasma workspace configuration after all external device debs are installed. The KDE-only KSystemStats GPU plugin is disabled for GNOME builds.
+
 ## Chinese Input
 
-The default rootfs includes Fcitx 5 Chinese input support:
+The default rootfs includes GNOME-native IBus Chinese input support:
 
-- `fcitx5`, `fcitx5-chinese-addons`, `fcitx5-pinyin`, Qt/GTK/KDE frontends, and Noto CJK fonts.
-- System and user-session input method environment variables are preconfigured for Fcitx.
-- `/etc/skel` and the default user home are seeded with Fcitx autostart and a default profile containing US keyboard plus Pinyin.
-- KWin is preconfigured to keep Plasma Keyboard enabled as the Wayland virtual keyboard, so the touchscreen keyboard and Fcitx can coexist.
+- `ibus`, `ibus-libpinyin`, GTK input modules, `im-config`, and Noto CJK fonts.
+- GNOME dconf defaults select US keyboard plus LibPinyin.
+- GNOME's on-screen keyboard is enabled and display orientation lock is disabled for tablet use.
 
-Set `INSTALL_FCITX5_CHINESE=0` in `rootfs_config` to opt out.
+Set `INSTALL_IBUS_CHINESE=0` in `rootfs_config` to opt out.
+
+## Camera Rotation
+
+The committed camera overlay remains the verified base payload, but the rootfs builder replaces its PipeWire SPA plugin with a native Resolute build. The rebuilt plugin queries `org.gnome.Mutter.DisplayConfig` on the current user session bus, prefers the built-in `DSI-1` display, and contains no fixed username, UID, runtime directory, KScreen command, or KWin configuration path.
 
 ## External Device Debs
 

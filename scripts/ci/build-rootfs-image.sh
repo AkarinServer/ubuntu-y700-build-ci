@@ -15,7 +15,7 @@ Required host tools: debootstrap, mount, chroot, mkfs.ext4, e2fsck, tar.
 Environment inputs:
   OUTPUT_DIR                 default: out/ci-rootfs
   OUTPUT_PREFIX              default: <DISTRO>-<ARCH>
-  DISTRO                     default: noble
+  DISTRO                     default: resolute
   ARCH                       default: arm64
   MIRROR                     default: http://ports.ubuntu.com/ubuntu-ports
   DEBOOTSTRAP_VARIANT        default: minbase; set empty for debootstrap default
@@ -33,8 +33,10 @@ Environment inputs:
   ROOT_PASSWORD_MODE         locked|set|empty, default: locked
   ROOT_PASSWORD              used when ROOT_PASSWORD_MODE=set
   USER_SUDO_MODE             password|nopasswd|none, default: password
-  SDDM_AUTOLOGIN             enable SDDM autologin for DEFAULT_USER_NAME, default: 0
-  SDDM_AUTOLOGIN_SESSION     SDDM session desktop name, default: plasma
+  DESKTOP_FLAVOR             gnome|plasma, default: gnome
+  DISPLAY_MANAGER            gdm3|sddm, default follows DESKTOP_FLAVOR
+  DESKTOP_AUTOLOGIN          enable display-manager autologin, default: 0
+  DESKTOP_SESSION            session desktop name, default: ubuntu for GNOME
   TZ_REGION                  default: Asia/Shanghai
   LOCALES                    default: en_US.UTF-8 UTF-8\nzh_CN.UTF-8 UTF-8
   LANG_NAME                  default: zh_CN.UTF-8
@@ -49,14 +51,18 @@ Environment inputs:
   HAPTICS_DEB_ARCHIVE        optional local path or URL containing haptics .deb files
   HAPTICS_DEB_DIR            optional directory containing source-built haptics .deb files
   CAMERA_STACK_DEB_DIR       optional directory containing source-built camera stack .deb files
-  BUILD_TB321FU_GPU_SENSOR   build/install TB321FU KSystemStats Adreno frequency plugin, default: 1
+  BUILD_TB321FU_GPU_SENSOR   build/install TB321FU KSystemStats Adreno frequency plugin, default: 0
   TB321FU_GPU_SENSOR_SOURCE_DIR
                               optional source directory for the plugin; defaults to repo source/
   INSTALL_GNOME_SNAPSHOT     install GNOME Snapshot camera app, default: 1
   INSTALL_FIREFOX            install Firefox browser, default: 1
-  INSTALL_FCITX5_CHINESE     install and configure Fcitx 5 Chinese input, default: 1
-  FCITX5_CHINESE_PACKAGES    optional package list for Fcitx 5 Chinese input
-  DISABLE_SNAPD              purge snapd and snap integration from rootfs, default: 1
+  INSTALL_IBUS_CHINESE       install and configure GNOME IBus Chinese input, default: 1
+  IBUS_CHINESE_PACKAGES      optional package list for IBus Chinese input
+  DISABLE_SNAPD              purge snapd and snap integration from rootfs, default: 0
+  REBUILD_TB321FU_CAMERA_GNOME_PLUGIN
+                              rebuild the PipeWire camera plugin for Mutter, default: 1
+  CAMERA_PIPEWIRE_VERSION    PipeWire source version for camera plugin, default: 1.6.2
+  CAMERA_PIPEWIRE_SOURCE_URL optional source archive URL override
   APPLY_Y700_FIRMWARE_FIXES  copy/verify required Y700 firmware paths only, default: 1
   APPLY_Y700_AUDIO_POLICY_FIXES
                               install Y700 WirePlumber ALSA policy for headset mic, default: 1
@@ -80,8 +86,9 @@ ci_require_cmd chroot
 ci_require_cmd e2fsck
 ci_require_cmd rsync
 ci_require_cmd sha256sum
+ci_require_cmd strings
 
-DISTRO=${DISTRO:-noble}
+DISTRO=${DISTRO:-resolute}
 ARCH=${ARCH:-arm64}
 MIRROR=${MIRROR:-http://ports.ubuntu.com/ubuntu-ports}
 DEBOOTSTRAP_VARIANT=${DEBOOTSTRAP_VARIANT-minbase}
@@ -99,21 +106,39 @@ DEFAULT_USER_PASSWORD=${DEFAULT_USER_PASSWORD:-1234}
 ROOT_PASSWORD_MODE=${ROOT_PASSWORD_MODE:-locked}
 ROOT_PASSWORD=${ROOT_PASSWORD:-}
 USER_SUDO_MODE=${USER_SUDO_MODE:-password}
-SDDM_AUTOLOGIN=${SDDM_AUTOLOGIN:-0}
-SDDM_AUTOLOGIN_SESSION=${SDDM_AUTOLOGIN_SESSION:-plasma}
+DESKTOP_FLAVOR=${DESKTOP_FLAVOR:-gnome}
+case "$DESKTOP_FLAVOR" in
+  gnome)
+    DISPLAY_MANAGER=${DISPLAY_MANAGER:-gdm3}
+    DESKTOP_SESSION=${DESKTOP_SESSION:-ubuntu}
+    ;;
+  plasma)
+    DISPLAY_MANAGER=${DISPLAY_MANAGER:-sddm}
+    DESKTOP_SESSION=${DESKTOP_SESSION:-plasma}
+    ;;
+  *) ci_die "unsupported DESKTOP_FLAVOR=$DESKTOP_FLAVOR" ;;
+esac
+DESKTOP_AUTOLOGIN=${DESKTOP_AUTOLOGIN:-0}
+case "$DESKTOP_FLAVOR:$DISPLAY_MANAGER" in
+  gnome:gdm3|plasma:sddm) ;;
+  *) ci_die "unsupported desktop/display-manager combination: $DESKTOP_FLAVOR/$DISPLAY_MANAGER" ;;
+esac
 TZ_REGION=${TZ_REGION:-Asia/Shanghai}
 LANG_NAME=${LANG_NAME:-zh_CN.UTF-8}
 LOCALES=${LOCALES:-$'en_US.UTF-8 UTF-8\nzh_CN.UTF-8 UTF-8'}
 CLEAN_APT_CACHE=${CLEAN_APT_CACHE:-1}
 APPLY_Y700_FIRMWARE_FIXES=${APPLY_Y700_FIRMWARE_FIXES:-1}
 APPLY_Y700_AUDIO_POLICY_FIXES=${APPLY_Y700_AUDIO_POLICY_FIXES:-1}
-BUILD_TB321FU_GPU_SENSOR=${BUILD_TB321FU_GPU_SENSOR:-1}
+BUILD_TB321FU_GPU_SENSOR=${BUILD_TB321FU_GPU_SENSOR:-0}
 TB321FU_GPU_SENSOR_SOURCE_DIR=${TB321FU_GPU_SENSOR_SOURCE_DIR:-}
 INSTALL_GNOME_SNAPSHOT=${INSTALL_GNOME_SNAPSHOT:-1}
 INSTALL_FIREFOX=${INSTALL_FIREFOX:-1}
-INSTALL_FCITX5_CHINESE=${INSTALL_FCITX5_CHINESE:-1}
-FCITX5_CHINESE_PACKAGES=${FCITX5_CHINESE_PACKAGES:-"fonts-noto-cjk im-config fcitx5 fcitx5-chinese-addons fcitx5-pinyin fcitx5-config-qt kde-config-fcitx5 fcitx5-frontend-gtk2 fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 fcitx5-frontend-qt5 fcitx5-frontend-qt6 fcitx5-module-wayland fcitx5-module-xorg fcitx5-module-kimpanel fcitx5-module-emoji fcitx5-material-color"}
-DISABLE_SNAPD=${DISABLE_SNAPD:-1}
+INSTALL_IBUS_CHINESE=${INSTALL_IBUS_CHINESE:-1}
+IBUS_CHINESE_PACKAGES=${IBUS_CHINESE_PACKAGES:-"fonts-noto-cjk im-config ibus ibus-libpinyin ibus-gtk ibus-gtk3 ibus-gtk4"}
+DISABLE_SNAPD=${DISABLE_SNAPD:-0}
+REBUILD_TB321FU_CAMERA_GNOME_PLUGIN=${REBUILD_TB321FU_CAMERA_GNOME_PLUGIN:-1}
+CAMERA_PIPEWIRE_VERSION=${CAMERA_PIPEWIRE_VERSION:-1.6.2}
+CAMERA_PIPEWIRE_SOURCE_URL=${CAMERA_PIPEWIRE_SOURCE_URL:-https://github.com/PipeWire/pipewire/archive/refs/tags/${CAMERA_PIPEWIRE_VERSION}.tar.gz}
 COMPRESS=${COMPRESS:-7z}
 CHUNK_SIZE=${CHUNK_SIZE:-}
 KEEP_RAW_IMAGE=${KEEP_RAW_IMAGE:-0}
@@ -123,14 +148,20 @@ PACKAGE_LIST=${PACKAGE_LIST:-$default_packages}
 if [ -n "${DESKTOP_ENV:-}" ]; then
   PACKAGE_LIST="$PACKAGE_LIST $DESKTOP_ENV"
 fi
+if [ "$DESKTOP_FLAVOR" = gnome ]; then
+  PACKAGE_LIST="$PACKAGE_LIST dconf-cli"
+fi
 if ci_bool "$INSTALL_GNOME_SNAPSHOT"; then
   PACKAGE_LIST="$PACKAGE_LIST gnome-snapshot"
 fi
 if ci_bool "$INSTALL_FIREFOX"; then
   PACKAGE_LIST="$PACKAGE_LIST firefox"
 fi
-if ci_bool "$INSTALL_FCITX5_CHINESE"; then
-  PACKAGE_LIST="$PACKAGE_LIST $FCITX5_CHINESE_PACKAGES"
+if ci_bool "$INSTALL_IBUS_CHINESE"; then
+  PACKAGE_LIST="$PACKAGE_LIST $IBUS_CHINESE_PACKAGES"
+fi
+if ! ci_bool "$DISABLE_SNAPD"; then
+  PACKAGE_LIST="$PACKAGE_LIST snapd apparmor gnome-software gnome-software-plugin-snap"
 fi
 
 configure_mozilla_firefox_repo() {
@@ -291,32 +322,103 @@ CONF
   grep -q 'api.alsa.split-enable = false' "$conf" || ci_die "Y700 ALSA policy missing split-enable=false"
 }
 
-apply_sddm_autologin() {
+apply_desktop_manager_config() {
   local root=$1
-  local conf_dir="$root/etc/sddm.conf.d"
-  local conf="$conf_dir/zz-tb321fu-autologin.conf"
-  local session=${SDDM_AUTOLOGIN_SESSION%.desktop}
+  local session=${DESKTOP_SESSION%.desktop}
 
-  rm -f "$conf" "$conf_dir/30-autologin.conf" "$conf_dir/10-y700-autologin.conf"
+  install -d -m 0755 "$root/etc/systemd/system"
+  ln -sfn /usr/lib/systemd/system/graphical.target "$root/etc/systemd/system/default.target"
 
-  if ! ci_bool "$SDDM_AUTOLOGIN"; then
-    ci_log "SDDM autologin disabled"
-    return 0
-  fi
+  case "$DISPLAY_MANAGER" in
+    gdm3)
+      local gdm_conf="$root/etc/gdm3/custom.conf"
+      local accounts_conf="$root/var/lib/AccountsService/users/$DEFAULT_USER_NAME"
 
-  ci_log "enabling SDDM autologin for $DEFAULT_USER_NAME"
-  install -d -m 0755 "$conf_dir"
-  cat > "$conf" <<CONF
+      [ -x "$root/usr/sbin/gdm3" ] || ci_die "gdm3 is not installed in the rootfs"
+      [ -f "$root/usr/share/wayland-sessions/$session.desktop" ] || \
+        [ -f "$root/usr/share/xsessions/$session.desktop" ] || \
+        ci_die "GNOME session is not installed: $session"
+      install -d -m 0755 "$root/etc/gdm3" "$root/var/lib/AccountsService/users"
+      {
+        echo '[daemon]'
+        if ci_bool "$DESKTOP_AUTOLOGIN"; then
+          echo 'AutomaticLoginEnable=true'
+          printf 'AutomaticLogin=%s\n' "$DEFAULT_USER_NAME"
+        else
+          echo 'AutomaticLoginEnable=false'
+        fi
+      } > "$gdm_conf"
+      chmod 0644 "$gdm_conf"
+
+      cat > "$accounts_conf" <<CONF
+[User]
+Session=$session
+XSession=$session
+SystemAccount=false
+CONF
+      chmod 0600 "$accounts_conf"
+
+      install -d -m 0755 "$root/etc/X11"
+      printf '/usr/sbin/gdm3\n' > "$root/etc/X11/default-display-manager"
+      ln -sfn /usr/lib/systemd/system/gdm3.service "$root/etc/systemd/system/display-manager.service"
+      if [ -f "$root/etc/systemd/system/y700-audio-card-guard.service" ]; then
+        install -d -m 0755 "$root/etc/systemd/system/gdm3.service.d"
+        cat > "$root/etc/systemd/system/gdm3.service.d/10-y700-audio-card-guard.conf" <<'CONF'
+[Unit]
+Requires=y700-audio-card-guard.service
+After=y700-audio-card-guard.service
+CONF
+        chmod 0644 "$root/etc/systemd/system/gdm3.service.d/10-y700-audio-card-guard.conf"
+      fi
+      rm -rf "$root/etc/sddm.conf.d"
+      rm -rf "$root/etc/systemd/system/sddm.service.d"
+      ;;
+    sddm)
+      local conf_dir="$root/etc/sddm.conf.d"
+      local conf="$conf_dir/zz-tb321fu-autologin.conf"
+
+      rm -f "$conf" "$conf_dir/30-autologin.conf" "$conf_dir/10-y700-autologin.conf"
+      if ci_bool "$DESKTOP_AUTOLOGIN"; then
+        install -d -m 0755 "$conf_dir"
+        cat > "$conf" <<CONF
 [Autologin]
 User=$DEFAULT_USER_NAME
 Session=$session
 Relogin=false
 CONF
-  chmod 0644 "$conf"
-  chown 0:0 "$conf" 2>/dev/null || true
+        chmod 0644 "$conf"
+      fi
+      printf '/usr/bin/sddm\n' > "$root/etc/X11/default-display-manager"
+      ln -sfn /usr/lib/systemd/system/sddm.service "$root/etc/systemd/system/display-manager.service"
+      ;;
+  esac
 
-  grep -q "^User=$DEFAULT_USER_NAME$" "$conf" || ci_die "SDDM autologin user was not written"
-  grep -q "^Session=$session$" "$conf" || ci_die "SDDM autologin session was not written"
+  chown 0:0 "$root/etc/X11/default-display-manager" 2>/dev/null || true
+  [ "$(cat "$root/etc/X11/default-display-manager")" = "/usr/sbin/gdm3" ] || \
+    [ "$DISPLAY_MANAGER" = sddm ] || ci_die "gdm3 was not selected as the default display manager"
+}
+
+apply_gnome_desktop_cleanup() {
+  local root=$1
+
+  [ "$DESKTOP_FLAVOR" = gnome ] || return 0
+  ci_log "removing KDE-only configuration from the GNOME rootfs"
+  rm -f \
+    "$root/etc/xdg/kwinrc" \
+    "$root/etc/skel/.config/kwinrc" \
+    "$root/etc/skel/.config/kwinoutputconfig.json" \
+    "$root/etc/skel/.config/plasmakeyboardrc" \
+    "$root/home/$DEFAULT_USER_NAME/.config/kwinrc" \
+    "$root/home/$DEFAULT_USER_NAME/.config/kwinoutputconfig.json" \
+    "$root/home/$DEFAULT_USER_NAME/.config/plasmakeyboardrc"
+  rm -rf \
+    "$root/etc/skel/.config/plasma-workspace" \
+    "$root/home/$DEFAULT_USER_NAME/.config/plasma-workspace"
+
+  if strings -a "$root/usr/lib/aarch64-linux-gnu/spa-0.2/libcamera/libspa-libcamera.so" \
+      | grep -Eq 'kscreen-doctor|kwinoutputconfig.json|/home/y700/.config|/run/user/1000'; then
+    ci_die "PipeWire camera plugin still contains KDE or fixed-user rotation integration"
+  fi
 }
 
 apply_tb321fu_legacy_cleanup() {
@@ -362,6 +464,153 @@ SystemdService=iio-sensor-proxy.service
 DBUS_SERVICE
     chmod 0644 "$root/usr/share/dbus-1/system-services/net.hadess.SensorProxy.service"
   fi
+}
+
+apply_tb321fu_camera_gnome_plugin() {
+  local root=$1
+  local camera_source=${TB321FU_CAMERA_PLUGIN_SOURCE:-"$SCRIPT_DIR/../../source/tb321fu-camera-rootfs-overlay/source/libcamera-source.cpp.clean-minimal-daily"}
+  local archive="$work_dir/pipewire-${CAMERA_PIPEWIRE_VERSION}.tar.gz"
+  local extract="$work_dir/pipewire-${CAMERA_PIPEWIRE_VERSION}-source"
+  local pipewire_source
+  local rootfs_src=/tmp/pipewire-y700-src
+  local rootfs_build=/tmp/pipewire-y700-build
+  local plugin_rel=usr/lib/aarch64-linux-gnu/spa-0.2/libcamera/libspa-libcamera.so
+
+  [ "$DESKTOP_FLAVOR" = gnome ] || ci_die "GNOME camera plugin rebuild requires DESKTOP_FLAVOR=gnome"
+  [ -f "$camera_source" ] || ci_die "missing GNOME camera source: $camera_source"
+  ci_log "rebuilding the TB321FU PipeWire camera plugin for GNOME/Mutter"
+
+  rm -rf "$extract" "$root$rootfs_src" "$root$rootfs_build"
+  mkdir -p "$extract" "$root$rootfs_src"
+  ci_download "$CAMERA_PIPEWIRE_SOURCE_URL" "$archive"
+  ci_extract_archive "$archive" "$extract"
+  pipewire_source=$(find "$extract" -type f -name meson.build -path '*/spa/plugins/libcamera/meson.build' -print -quit)
+  [ -n "$pipewire_source" ] || ci_die "PipeWire source archive is missing the libcamera plugin"
+  pipewire_source=${pipewire_source%/spa/plugins/libcamera/meson.build}
+  rsync -a --delete "$pipewire_source"/ "$root$rootfs_src"/
+  install -m 0644 "$camera_source" "$root$rootfs_src/spa/plugins/libcamera/libcamera-source.cpp"
+  cat > "$root$rootfs_src/spa/plugins/libcamera/meson.build" <<'MESON'
+libcamera_sources = [
+  'libcamera.c',
+  'libcamera-manager.cpp',
+  'libcamera-device.cpp',
+  'libcamera-source.cpp'
+]
+
+gio_dep = dependency('gio-2.0')
+libcameralib = shared_library('spa-libcamera',
+  libcamera_sources,
+  include_directories : [ configinc ],
+  dependencies : [ spa_dep, libcamera_dep, pthread_lib, gio_dep ],
+  install : true,
+  install_dir : spa_plugindir / 'libcamera')
+MESON
+
+  cat > "$root/root/ci-build-tb321fu-camera-plugin.sh" <<'CAMERA_PLUGIN_BUILD'
+#!/usr/bin/env bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+if [ -n "${APT_HTTP_PROXY:-}" ] || [ -n "${APT_HTTPS_PROXY:-}" ]; then
+  mkdir -p /etc/apt/apt.conf.d
+  : > /etc/apt/apt.conf.d/99ci-proxy
+  [ -z "${APT_HTTP_PROXY:-}" ] || printf 'Acquire::http::Proxy "%s";\n' "$APT_HTTP_PROXY" >> /etc/apt/apt.conf.d/99ci-proxy
+  [ -z "${APT_HTTPS_PROXY:-}" ] || printf 'Acquire::https::Proxy "%s";\n' "$APT_HTTPS_PROXY" >> /etc/apt/apt.conf.d/99ci-proxy
+fi
+
+src=/tmp/pipewire-y700-src
+build=/tmp/pipewire-y700-build
+plugin=/usr/lib/aarch64-linux-gnu/spa-0.2/libcamera/libspa-libcamera.so
+build_deps="binutils build-essential meson ninja-build pkg-config libcamera-dev libglib2.0-dev"
+new_build_deps=""
+for pkg in $build_deps; do
+  if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
+    new_build_deps="$new_build_deps $pkg"
+  fi
+done
+
+apt-get update
+apt-get install -y --no-install-recommends $build_deps
+meson setup "$build" "$src" \
+  --buildtype=release \
+  --prefix=/usr \
+  -Ddocs=disabled \
+  -Dman=disabled \
+  -Dexamples=disabled \
+  -Dtests=disabled \
+  -Dinstalled_tests=disabled \
+  -Dgstreamer=disabled \
+  -Dpipewire-alsa=disabled \
+  -Dpipewire-jack=disabled \
+  -Dpipewire-v4l2=disabled \
+  -Dsystemd-user-service=disabled \
+  -Dlibcamera=enabled
+ninja -C "$build" spa/plugins/libcamera/libspa-libcamera.so
+install -m 0644 "$build/spa/plugins/libcamera/libspa-libcamera.so" "$plugin"
+
+strings -a "$plugin" | grep -q 'org.gnome.Mutter.DisplayConfig'
+if strings -a "$plugin" | grep -Eq 'kscreen-doctor|kwinoutputconfig.json|/home/y700/.config|/run/user/1000'; then
+  echo 'rebuilt camera plugin still contains KDE or fixed-user integration' >&2
+  exit 1
+fi
+readelf -d "$plugin" | grep -q 'libgio-2.0.so'
+readelf -d "$plugin" | grep -Eq 'libcamera\.so\.0\.7|libcamera\.so'
+install -d -m 0755 /usr/share/tb321fu-camera-stack
+sha256sum "$plugin" > /usr/share/tb321fu-camera-stack/libspa-libcamera.so.sha256
+
+rm -rf "$src" "$build"
+if [ -n "$new_build_deps" ]; then
+  apt-get purge -y $new_build_deps
+  apt-get autoremove -y --purge
+fi
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+rm -f /etc/apt/apt.conf.d/99ci-proxy
+CAMERA_PLUGIN_BUILD
+  chmod +x "$root/root/ci-build-tb321fu-camera-plugin.sh"
+
+  local resolv_backup="$work_dir/camera-plugin-resolv.conf.original"
+  local resolv_link="$work_dir/camera-plugin-resolv.conf.link"
+  rm -f "$resolv_backup" "$resolv_link"
+  if [ -L "$root/etc/resolv.conf" ]; then
+    readlink "$root/etc/resolv.conf" > "$resolv_link"
+  elif [ -e "$root/etc/resolv.conf" ]; then
+    cp -a "$root/etc/resolv.conf" "$resolv_backup"
+  fi
+  rm -f "$root/etc/resolv.conf"
+  if [ -n "$RESOLV_CONF_CONTENT" ]; then
+    printf '%s\n' "$RESOLV_CONF_CONTENT" > "$root/etc/resolv.conf"
+  elif [ -f /run/systemd/resolve/resolv.conf ]; then
+    cp /run/systemd/resolve/resolv.conf "$root/etc/resolv.conf"
+  else
+    cp /etc/resolv.conf "$root/etc/resolv.conf"
+  fi
+
+  chroot "$root" env -i \
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+    HOME=/root \
+    LANG=C.UTF-8 \
+    APT_HTTP_PROXY="$APT_HTTP_PROXY" \
+    APT_HTTPS_PROXY="$APT_HTTPS_PROXY" \
+    http_proxy="$APT_HTTP_PROXY" \
+    https_proxy="$APT_HTTPS_PROXY" \
+    HTTP_PROXY="$APT_HTTP_PROXY" \
+    HTTPS_PROXY="$APT_HTTPS_PROXY" \
+    bash /root/ci-build-tb321fu-camera-plugin.sh
+
+  rm -f "$root/etc/resolv.conf"
+  if [ -f "$resolv_link" ]; then
+    ln -s "$(cat "$resolv_link")" "$root/etc/resolv.conf"
+  elif [ -f "$resolv_backup" ]; then
+    cp -a "$resolv_backup" "$root/etc/resolv.conf"
+  else
+    ln -s ../run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"
+  fi
+  rm -f "$root/root/ci-build-tb321fu-camera-plugin.sh"
+
+  [ -f "$root/$plugin_rel" ] || ci_die "rebuilt GNOME camera plugin is missing: /$plugin_rel"
+  strings -a "$root/$plugin_rel" | grep -q 'org.gnome.Mutter.DisplayConfig' || \
+    ci_die "rebuilt camera plugin is missing Mutter integration"
 }
 
 apply_tb321fu_gpu_sensor() {
@@ -617,148 +866,41 @@ if ci_bool_chroot "$INSTALL_FIREFOX"; then
   esac
 fi
 
-if ci_bool_chroot "$INSTALL_FCITX5_CHINESE"; then
-  for pkg in fcitx5 fcitx5-chinese-addons fcitx5-pinyin im-config fonts-noto-cjk; do
+if ci_bool_chroot "$INSTALL_IBUS_CHINESE"; then
+  for pkg in ibus ibus-libpinyin im-config fonts-noto-cjk; do
     dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || {
-      echo "required Fcitx 5 Chinese input package missing: $pkg" >&2
+      echo "required IBus Chinese input package missing: $pkg" >&2
       exit 1
     }
   done
 
   install -d -m 0755 \
-    /etc/environment.d \
-    /etc/skel/.config/environment.d \
-    /etc/skel/.config/autostart \
-    /etc/skel/.config/fcitx5 \
-    /etc/skel/.config/plasma-workspace/env
+    /etc/dconf/profile \
+    /etc/dconf/db/local.d \
+    /etc/skel
 
-  cat > /etc/environment.d/90-fcitx5.conf <<'FCITX5_ENV'
-GTK_IM_MODULE=fcitx
-QT_IM_MODULE=fcitx
-XMODIFIERS=@im=fcitx
-SDL_IM_MODULE=fcitx
-INPUT_METHOD=fcitx
-FCITX5_ENV
-  chmod 0644 /etc/environment.d/90-fcitx5.conf
-  cp -a /etc/environment.d/90-fcitx5.conf /etc/skel/.config/environment.d/90-fcitx5.conf
+  cat > /etc/dconf/profile/user <<'DCONF_PROFILE'
+user-db:user
+system-db:local
+DCONF_PROFILE
+  cat > /etc/dconf/db/local.d/00-y700-gnome <<'GNOME_DEFAULTS'
+[org/gnome/desktop/input-sources]
+sources=[('xkb', 'us'), ('ibus', 'libpinyin')]
+mru-sources=[('ibus', 'libpinyin'), ('xkb', 'us')]
 
-  cat > /etc/skel/.config/plasma-workspace/env/fcitx5.sh <<'FCITX5_PLASMA_ENV'
-#!/bin/sh
-export GTK_IM_MODULE=fcitx
-export QT_IM_MODULE=fcitx
-export XMODIFIERS=@im=fcitx
-export SDL_IM_MODULE=fcitx
-export INPUT_METHOD=fcitx
-FCITX5_PLASMA_ENV
-  chmod 0755 /etc/skel/.config/plasma-workspace/env/fcitx5.sh
+[org/gnome/desktop/a11y/applications]
+screen-keyboard-enabled=true
 
-  cat > /etc/skel/.config/autostart/org.fcitx.Fcitx5.desktop <<'FCITX5_AUTOSTART'
-[Desktop Entry]
-Name=Fcitx 5
-GenericName=Input Method
-Comment=Start Fcitx 5 input method
-Exec=fcitx5 -d --replace
-Icon=org.fcitx.Fcitx5
-Terminal=false
-Type=Application
-Categories=System;Utility;
-X-GNOME-Autostart-enabled=true
-X-KDE-autostart-after=panel
-FCITX5_AUTOSTART
-  chmod 0644 /etc/skel/.config/autostart/org.fcitx.Fcitx5.desktop
-
-  cat > /etc/skel/.config/fcitx5/profile <<'FCITX5_PROFILE'
-[Groups/0]
-# Group Name
-Name=Default
-# Layout
-Default Layout=us
-# Default Input Method
-DefaultIM=pinyin
-
-[Groups/0/Items/0]
-# Name
-Name=keyboard-us
-# Layout
-Layout=
-
-[Groups/0/Items/1]
-# Name
-Name=pinyin
-# Layout
-Layout=
-
-[GroupOrder]
-0=Default
-FCITX5_PROFILE
-  chmod 0644 /etc/skel/.config/fcitx5/profile
+[org/gnome/settings-daemon/peripherals/touchscreen]
+orientation-lock=false
+GNOME_DEFAULTS
+  chmod 0644 /etc/dconf/profile/user /etc/dconf/db/local.d/00-y700-gnome
+  dconf update
+  cat > /etc/skel/.xinputrc <<'IBUS_XINPUT'
+run_im ibus
+IBUS_XINPUT
+  chmod 0644 /etc/skel/.xinputrc
 fi
-
-install -d -m 0755 /etc/xdg /etc/skel/.config
-cat > /etc/skel/.config/plasmakeyboardrc <<'PLASMAKEYBOARDRC'
-[General]
-enabledLocales=en_US
-soundEnabled=true
-vibrationEnabled=true
-vibrationMs=20
-PLASMAKEYBOARDRC
-chmod 0644 /etc/skel/.config/plasmakeyboardrc
-
-cat > /etc/xdg/kwinrc <<'KWINRC'
-[Wayland]
-InputMethod=/usr/share/applications/org.kde.plasma.keyboard.desktop
-VirtualKeyboardEnabled=true
-KWINRC
-chmod 0644 /etc/xdg/kwinrc
-cp -a /etc/xdg/kwinrc /etc/skel/.config/kwinrc
-
-cat > /etc/skel/.config/kwinoutputconfig.json <<'KWINOUTPUTCONFIG'
-[
-    {
-        "data": [
-            {
-                "allowDdcCi": true,
-                "allowSdrSoftwareBrightness": false,
-                "autoBrightnessCurve": [
-                    0,
-                    200,
-                    2500,
-                    12000,
-                    40000,
-                    100000
-                ],
-                "autoRotation": "InTabletMode",
-                "automaticBrightness": true,
-                "brightness": 0.35,
-                "colorPowerTradeoff": "PreferEfficiency",
-                "colorProfileSource": "sRGB",
-                "connectorName": "DSI-1",
-                "detectedDdcCi": false,
-                "edrPolicy": "always",
-                "highDynamicRange": false,
-                "iccProfilePath": "",
-                "maxBitsPerColor": 0,
-                "mode": {
-                    "height": 2560,
-                    "refreshRate": 120000,
-                    "width": 1600
-                },
-                "overscan": 0,
-                "rgbRange": "Automatic",
-                "scale": 2.3,
-                "sdrBrightness": 200,
-                "sdrGamutWideness": 0,
-                "sharpness": 0,
-                "transform": "Rotated180",
-                "vrrPolicy": "Never",
-                "wideColorGamut": false
-            }
-        ],
-        "name": "outputs"
-    }
-]
-KWINOUTPUTCONFIG
-chmod 0644 /etc/skel/.config/kwinoutputconfig.json
 
 systemctl enable NetworkManager || true
 systemctl enable ssh || true
@@ -769,31 +911,9 @@ fi
 printf '%s:%s\n' "$DEFAULT_USER_NAME" "$DEFAULT_USER_PASSWORD" | chpasswd
 
 default_user_group=$(id -gn "$DEFAULT_USER_NAME")
-if [ -d "/home/$DEFAULT_USER_NAME" ]; then
-  install -d -m 0755 "/home/$DEFAULT_USER_NAME/.config"
-  for skel_config in kwinrc plasmakeyboardrc kwinoutputconfig.json; do
-    cp -a "/etc/skel/.config/$skel_config" "/home/$DEFAULT_USER_NAME/.config/$skel_config"
-    chown "$DEFAULT_USER_NAME:$default_user_group" "/home/$DEFAULT_USER_NAME/.config/$skel_config"
-  done
-fi
-
-if ci_bool_chroot "$INSTALL_FCITX5_CHINESE" && [ -d "/home/$DEFAULT_USER_NAME" ]; then
-  install -d -m 0755 \
-    "/home/$DEFAULT_USER_NAME/.config" \
-    "/home/$DEFAULT_USER_NAME/.config/environment.d" \
-    "/home/$DEFAULT_USER_NAME/.config/autostart" \
-    "/home/$DEFAULT_USER_NAME/.config/fcitx5" \
-    "/home/$DEFAULT_USER_NAME/.config/plasma-workspace" \
-    "/home/$DEFAULT_USER_NAME/.config/plasma-workspace/env"
-  cp -a /etc/skel/.config/environment.d/90-fcitx5.conf "/home/$DEFAULT_USER_NAME/.config/environment.d/90-fcitx5.conf"
-  cp -a /etc/skel/.config/autostart/org.fcitx.Fcitx5.desktop "/home/$DEFAULT_USER_NAME/.config/autostart/org.fcitx.Fcitx5.desktop"
-  cp -a /etc/skel/.config/fcitx5/profile "/home/$DEFAULT_USER_NAME/.config/fcitx5/profile"
-  cp -a /etc/skel/.config/plasma-workspace/env/fcitx5.sh "/home/$DEFAULT_USER_NAME/.config/plasma-workspace/env/fcitx5.sh"
-  chown -R "$DEFAULT_USER_NAME:$default_user_group" \
-    "/home/$DEFAULT_USER_NAME/.config/environment.d" \
-    "/home/$DEFAULT_USER_NAME/.config/autostart" \
-    "/home/$DEFAULT_USER_NAME/.config/fcitx5" \
-    "/home/$DEFAULT_USER_NAME/.config/plasma-workspace"
+if ci_bool_chroot "$INSTALL_IBUS_CHINESE" && [ -d "/home/$DEFAULT_USER_NAME" ]; then
+  cp -a /etc/skel/.xinputrc "/home/$DEFAULT_USER_NAME/.xinputrc"
+  chown "$DEFAULT_USER_NAME:$default_user_group" "/home/$DEFAULT_USER_NAME/.xinputrc"
 fi
 
 case "$ROOT_PASSWORD_MODE" in
@@ -871,6 +991,15 @@ if ci_bool_chroot "$DISABLE_SNAPD"; then
     echo 'snapd is still installed despite DISABLE_SNAPD=1' >&2
     exit 1
   fi
+else
+  for pkg in snapd apparmor gnome-software-plugin-snap; do
+    dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || {
+      echo "required Snap integration package missing: $pkg" >&2
+      exit 1
+    }
+  done
+  systemctl enable snapd.socket
+  systemctl enable apparmor.service
 fi
 
 if [ "$CLEAN_APT_CACHE" = 1 ]; then
@@ -928,7 +1057,8 @@ chroot "$rootfs_dir" env -i \
   HOME=/root \
   LANG=C.UTF-8 \
   PACKAGE_LIST="$PACKAGE_LIST" \
-  INSTALL_FCITX5_CHINESE="$INSTALL_FCITX5_CHINESE" \
+  INSTALL_IBUS_CHINESE="$INSTALL_IBUS_CHINESE" \
+  DESKTOP_FLAVOR="$DESKTOP_FLAVOR" \
   DEFAULT_USER_NAME="$DEFAULT_USER_NAME" \
   DEFAULT_USER_PASSWORD="$DEFAULT_USER_PASSWORD" \
   ROOT_PASSWORD_MODE="$ROOT_PASSWORD_MODE" \
@@ -968,7 +1098,7 @@ if [ -n "${OVERLAY_DIR:-}" ]; then
   rsync -aH --numeric-ids "$OVERLAY_DIR"/ "$rootfs_dir"/
 fi
 
-apply_sddm_autologin "$rootfs_dir"
+apply_desktop_manager_config "$rootfs_dir"
 apply_tb321fu_legacy_cleanup "$rootfs_dir"
 
 if ci_bool "$APPLY_Y700_FIRMWARE_FIXES"; then
@@ -977,9 +1107,13 @@ fi
 if ci_bool "$APPLY_Y700_AUDIO_POLICY_FIXES"; then
   apply_y700_audio_policy_fixes "$rootfs_dir"
 fi
+if ci_bool "$REBUILD_TB321FU_CAMERA_GNOME_PLUGIN"; then
+  apply_tb321fu_camera_gnome_plugin "$rootfs_dir"
+fi
 if ci_bool "$BUILD_TB321FU_GPU_SENSOR"; then
   apply_tb321fu_gpu_sensor "$rootfs_dir"
 fi
+apply_gnome_desktop_cleanup "$rootfs_dir"
 
 cat > "$build_info" <<INFO
 generated=$(date -u -Iseconds)
@@ -991,8 +1125,10 @@ hostname=$HOSTNAME_NAME
 default_user=$DEFAULT_USER_NAME
 root_password_mode=$ROOT_PASSWORD_MODE
 user_sudo_mode=$USER_SUDO_MODE
-sddm_autologin=$SDDM_AUTOLOGIN
-sddm_autologin_session=$SDDM_AUTOLOGIN_SESSION
+desktop_flavor=$DESKTOP_FLAVOR
+display_manager=$DISPLAY_MANAGER
+desktop_autologin=$DESKTOP_AUTOLOGIN
+desktop_session=$DESKTOP_SESSION
 rootfs_label=$ROOTFS_LABEL
 rootfs_uuid=${ROOTFS_UUID:-}
 rootfs_partlabel=$ROOTFS_PARTLABEL
@@ -1009,8 +1145,10 @@ build_tb321fu_gpu_sensor=$BUILD_TB321FU_GPU_SENSOR
 tb321fu_gpu_sensor_source_dir=${TB321FU_GPU_SENSOR_SOURCE_DIR:-repo-default}
 install_gnome_snapshot=$INSTALL_GNOME_SNAPSHOT
 install_firefox=$INSTALL_FIREFOX
-install_fcitx5_chinese=$INSTALL_FCITX5_CHINESE
+install_ibus_chinese=$INSTALL_IBUS_CHINESE
 disable_snapd=$DISABLE_SNAPD
+rebuild_tb321fu_camera_gnome_plugin=$REBUILD_TB321FU_CAMERA_GNOME_PLUGIN
+camera_pipewire_version=$CAMERA_PIPEWIRE_VERSION
 apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
 apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
 INFO

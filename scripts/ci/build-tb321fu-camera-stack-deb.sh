@@ -159,7 +159,8 @@ Recommends: gnome-snapshot
 Replaces: y700-daily-rootfs-overlay, libspa-0.2-libcamera, gstreamer1.0-libcamera
 Provides: y700-camera-stack
 Description: Lenovo TB321FU verified camera userspace stack
- Source-built libcamera and the live-verified PipeWire libcamera integration used by the non-GitHub rootfs.
+ Live-verified libcamera payload and a base PipeWire libcamera plugin. GNOME
+ rootfs builds replace the SPA plugin with a target-native Mutter build.
 EOF_CONTROL
 }
 
@@ -260,7 +261,7 @@ build_camera_package() {
       "$pkg/opt/libcamera-y700/lib/aarch64-linux-gnu/gstreamer-1.0/libgstlibcamera.so" \
       "$pkg/usr/lib/aarch64-linux-gnu/spa-0.2/libcamera/libspa-libcamera.so"
     echo
-    echo "== plugin markers =="
+    echo "== base plugin markers (replaced by GNOME rootfs build) =="
     strings -a "$pkg/usr/lib/aarch64-linux-gnu/spa-0.2/libcamera/libspa-libcamera.so" | grep -E 'kwinoutputconfig|kscreen-doctor|y700_camera|spa_system_eventfd|camera-display-transform-mode|display-rotation-base|libcamera-y700-test|api.libcamera.rotation' | head -n 120 || true
   } > "$report"
 
