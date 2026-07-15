@@ -29,7 +29,11 @@ Optional override example:
 ```text
 DISTRO=resolute
 ARCH=arm64
-MIRROR=http://ports.ubuntu.com/ubuntu-ports
+MIRROR=https://ports.ubuntu.com/ubuntu-ports
+DEBOOTSTRAP_RETRIES=3
+APT_FORCE_IPV4=1
+APT_RETRIES=6
+APT_TIMEOUT_SECONDS=30
 ROOTFS_IMAGE_SIZE=20G
 ROOTFS_UUID=
 ROOTFS_LABEL=Ubuntu
@@ -62,6 +66,8 @@ COMPRESS=7z
 CHUNK_SIZE=
 KEEP_RAW_IMAGE=0
 ```
+
+The workflow retries transient `curl`, APT, and debootstrap failures, forces `curl` and APT to IPv4 by default, and caches host APT packages, rootfs/debootstrap packages, and the rebuilt kernel artifact. Cache keys include the relevant architecture, source/config identity, and a UTC date so older package caches can be restored without remaining immutable forever.
 
 ## Boot Config
 

@@ -15,10 +15,10 @@ on:
       ubuntu_mirror:
         description: Ubuntu 软件源地址；arm64 设备应使用 ports.ubuntu.com/ubuntu-ports。
         required: true
-        default: http://ports.ubuntu.com/ubuntu-ports
+        default: https://ports.ubuntu.com/ubuntu-ports
         type: choice
         options:
-          - http://ports.ubuntu.com/ubuntu-ports
+          - https://ports.ubuntu.com/ubuntu-ports
       debootstrap_variant:
         description: debootstrap 变体；default 表示不传 --variant，minbase 是更小基础系统，buildd 偏构建环境。
         required: true
@@ -117,16 +117,56 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set cache metadata
+        id: cache-meta
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore host APT cache
+        id: host-apt-cache
+        continue-on-error: true
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/apt-host-cache
+          key: host-apt-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-meta.outputs.date }}-${{ hashFiles('.github/workflows/build-rootfs-and-grub.yml') }}
+          restore-keys: |
+            host-apt-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Install dependencies
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y \
+          source scripts/ci/common.sh
+          host_apt_cache="$RUNNER_TEMP/apt-host-cache/archives"
+          sudo install -d -m 0755 "$host_apt_cache"
+          sudo rm -rf "$host_apt_cache/partial"
+          sudo rm -f "$host_apt_cache/lock"
+          sudo install -d -o _apt -g root -m 0700 "$host_apt_cache/partial"
+          sudo tee /etc/apt/apt.conf.d/80ci-network >/dev/null <<'APT_CONFIG'
+          Acquire::Retries "6";
+          Acquire::ForceIPv4 "true";
+          Acquire::http::Timeout "30";
+          Acquire::https::Timeout "30";
+          APT_CONFIG
+          packages=(
             debootstrap dosfstools mtools e2fsprogs rsync curl unzip tar xz-utils zstd p7zip-full \
             gdisk qemu-utils sudo ca-certificates gnupg binutils git make bc bison flex \
             libssl-dev libelf-dev dwarves device-tree-compiler \
             meson ninja-build pkg-config protobuf-c-compiler gcc-aarch64-linux-gnu \
             libglib2.0-dev:arm64 libqmi-glib-dev:arm64 libgudev-1.0-dev:arm64 libpolkit-gobject-1-dev:arm64 libprotobuf-c-dev:arm64
+          )
+          ci_retry 4 10 sudo apt-get update
+          ci_retry 4 10 sudo apt-get \
+            -o "Dir::Cache::archives=$host_apt_cache" \
+            -o APT::Keep-Downloaded-Packages=true \
+            install -y "${packages[@]}"
+          sudo chmod -R a+rX "$RUNNER_TEMP/apt-host-cache"
+
+      - name: Save host APT cache
+        if: steps.host-apt-cache.outcome == 'success' && steps.host-apt-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/apt-host-cache
+          key: ${{ steps.host-apt-cache.outputs.cache-primary-key }}
 
       - name: Apply workflow configuration
         env:
@@ -151,6 +191,10 @@ jobs:
           cat > "$RUNNER_TEMP/rootfs.env" <<'CONFIG_EOF'
           DISTRO=resolute
           ARCH=arm64
+          DEBOOTSTRAP_RETRIES=3
+          APT_FORCE_IPV4=1
+          APT_RETRIES=6
+          APT_TIMEOUT_SECONDS=30
           ROOTFS_UUID=
           DESKTOP_FLAVOR=gnome
           DISPLAY_MANAGER=gdm3
@@ -270,18 +314,47 @@ jobs:
           {
             echo 'OUTPUT_DIR_ROOTFS=out/ci-rootfs'
             echo 'OUTPUT_DIR_GRUB=out/ci-grub'
+            echo "DEBOOTSTRAP_CACHE_DIR=$RUNNER_TEMP/debootstrap-cache"
+            echo "ROOTFS_APT_CACHE_DIR=$RUNNER_TEMP/rootfs-apt-cache"
             echo "BUILD_CONFIG_NOTES_DIR=$config_notes_dir"
             echo 'OUTPUT_PREFIX<<EOF_OUTPUT_PREFIX'
             echo '${{ inputs.output_prefix }}'
             echo 'EOF_OUTPUT_PREFIX'
           } >> "$GITHUB_ENV"
 
+      - name: Set build cache metadata
+        id: build-cache-meta
+        run: |
+          set -euo pipefail
+          rootfs_identity=$(printf '%s\0' \
+            "$DISTRO" "$ARCH" "$MIRROR" "$DEBOOTSTRAP_VARIANT" \
+            | sha256sum | cut -d' ' -f1)
+          kernel_identity=$(printf '%s\0' \
+            "$KERNEL_SOURCE_REPOSITORY" "$KERNEL_SOURCE_REF" \
+            "${KERNEL_BASE_CONFIG_ARCHIVE:-$KERNEL_ARTIFACT_ARCHIVE}" "$DTB_NAME" \
+            | sha256sum | cut -d' ' -f1)
+          echo "rootfs=$rootfs_identity" >> "$GITHUB_OUTPUT"
+          echo "kernel=$kernel_identity" >> "$GITHUB_OUTPUT"
+
+      - name: Restore rootfs package cache
+        id: rootfs-package-cache
+        continue-on-error: true
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ runner.temp }}/debootstrap-cache
+            ${{ runner.temp }}/rootfs-apt-cache
+          key: rootfs-packages-${{ runner.arch }}-${{ steps.build-cache-meta.outputs.rootfs }}-${{ steps.cache-meta.outputs.date }}-${{ hashFiles('scripts/ci/build-rootfs-image.sh', '.github/workflows/build-rootfs-and-grub.yml') }}
+          restore-keys: |
+            rootfs-packages-${{ runner.arch }}-${{ steps.build-cache-meta.outputs.rootfs }}-
+
       - name: Prepare GRUB build input
         run: |
           set -euo pipefail
           if [ -n "${GRUB_BUILD_ARCHIVE:-}" ]; then
             mkdir -p "$RUNNER_TEMP/grub-build"
-            curl -fL --retry 3 -o "$RUNNER_TEMP/grub-build.tar" "$GRUB_BUILD_ARCHIVE"
+            source scripts/ci/common.sh
+            ci_download "$GRUB_BUILD_ARCHIVE" "$RUNNER_TEMP/grub-build.tar"
             if ! tar -C "$RUNNER_TEMP/grub-build" -xf "$RUNNER_TEMP/grub-build.tar"; then
               tar -C "$RUNNER_TEMP/grub-build" -xzf "$RUNNER_TEMP/grub-build.tar"
             fi
@@ -336,14 +409,19 @@ jobs:
             bash scripts/ci/build-y700-sensor-debs.sh
           echo 'Y700_SENSOR_DEB_DIR=out/y700-sensor-debs' >> "$GITHUB_ENV"
 
+      - name: Restore Snap-capable kernel artifacts
+        if: env.BUILD_Y700_KERNEL == '1'
+        id: kernel-artifact-cache
+        continue-on-error: true
+        uses: actions/cache/restore@v5
+        with:
+          path: out/y700-kernel-artifacts
+          key: y700-kernel-${{ runner.arch }}-${{ steps.build-cache-meta.outputs.kernel }}-${{ hashFiles('scripts/ci/build-y700-kernel-artifacts.sh', '.github/workflows/build-rootfs-and-grub.yml') }}
+
       - name: Build Snap-capable kernel artifacts
+        if: env.BUILD_Y700_KERNEL == '1' && steps.kernel-artifact-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          if [ "${BUILD_Y700_KERNEL:-0}" != "1" ]; then
-            echo 'BUILD_Y700_KERNEL is not 1; using KERNEL_ARTIFACT_ARCHIVE unchanged.'
-            echo 'Y700_KERNEL_ARTIFACT_ARCHIVE=' >> "$GITHUB_ENV"
-            exit 0
-          fi
           env \
             OUTPUT_DIR=out/y700-kernel-artifacts \
             KERNEL_SOURCE_REPOSITORY="$KERNEL_SOURCE_REPOSITORY" \
@@ -352,6 +430,23 @@ jobs:
             KERNEL_BASE_CONFIG_ARCHIVE="${KERNEL_BASE_CONFIG_ARCHIVE:-$KERNEL_ARTIFACT_ARCHIVE}" \
             DTB_NAME="$DTB_NAME" \
             bash scripts/ci/build-y700-kernel-artifacts.sh
+
+      - name: Save Snap-capable kernel artifacts
+        if: env.BUILD_Y700_KERNEL == '1' && steps.kernel-artifact-cache.outcome == 'success' && steps.kernel-artifact-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: out/y700-kernel-artifacts
+          key: ${{ steps.kernel-artifact-cache.outputs.cache-primary-key }}
+
+      - name: Select kernel artifacts
+        run: |
+          set -euo pipefail
+          if [ "${BUILD_Y700_KERNEL:-0}" != "1" ]; then
+            echo 'BUILD_Y700_KERNEL is not 1; using KERNEL_ARTIFACT_ARCHIVE unchanged.'
+            echo 'Y700_KERNEL_ARTIFACT_ARCHIVE=' >> "$GITHUB_ENV"
+            exit 0
+          fi
           kernel_archive=$(find out/y700-kernel-artifacts -maxdepth 1 -type f -name 'y700-kernel-artifacts-*-snap.tar.gz' -print -quit)
           test -n "$kernel_archive"
           echo "Y700_KERNEL_ARTIFACT_ARCHIVE=$kernel_archive" >> "$GITHUB_ENV"
@@ -421,11 +516,32 @@ jobs:
           echo 'TB321FU_CAMERA_STACK_DEB_DIR=out/tb321fu-camera-stack-debs' >> "$GITHUB_ENV"
 
       - name: Build rootfs image
+        id: build-rootfs
         run: |
           set -euo pipefail
-          sudo --preserve-env=OUTPUT_PREFIX,DISTRO,ARCH,MIRROR,DEBOOTSTRAP_VARIANT,RESOLV_CONF_CONTENT,APT_HTTP_PROXY,APT_HTTPS_PROXY,http_proxy,https_proxy,HTTP_PROXY,HTTPS_PROXY,APT_SOURCES_LIST,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,DESKTOP_FLAVOR,DISPLAY_MANAGER,DESKTOP_AUTOLOGIN,DESKTOP_SESSION,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,DEB_ARCHIVE,DEB_DIR,SENSOR_DEB_ARCHIVE,SENSOR_DEB_DIR,HAPTICS_DEB_ARCHIVE,HAPTICS_DEB_DIR,CAMERA_STACK_DEB_DIR,BUILD_TB321FU_GPU_SENSOR,TB321FU_GPU_SENSOR_SOURCE_DIR,TB321FU_GPU_SENSOR_BUILD_JOBS,INSTALL_GNOME_SNAPSHOT,INSTALL_FIREFOX,INSTALL_IBUS_CHINESE,IBUS_CHINESE_PACKAGES,DISABLE_SNAPD,REBUILD_TB321FU_CAMERA_GNOME_PLUGIN,CAMERA_PIPEWIRE_VERSION,CAMERA_PIPEWIRE_SOURCE_URL,APPLY_Y700_FIRMWARE_FIXES,APPLY_Y700_AUDIO_POLICY_FIXES,CLEAN_APT_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
+          sudo --preserve-env=OUTPUT_PREFIX,DISTRO,ARCH,MIRROR,DEBOOTSTRAP_VARIANT,DEBOOTSTRAP_CACHE_DIR,DEBOOTSTRAP_RETRIES,RESOLV_CONF_CONTENT,APT_HTTP_PROXY,APT_HTTPS_PROXY,APT_FORCE_IPV4,APT_RETRIES,APT_TIMEOUT_SECONDS,ROOTFS_APT_CACHE_DIR,http_proxy,https_proxy,HTTP_PROXY,HTTPS_PROXY,APT_SOURCES_LIST,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,DESKTOP_FLAVOR,DISPLAY_MANAGER,DESKTOP_AUTOLOGIN,DESKTOP_SESSION,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,DEB_ARCHIVE,DEB_DIR,SENSOR_DEB_ARCHIVE,SENSOR_DEB_DIR,HAPTICS_DEB_ARCHIVE,HAPTICS_DEB_DIR,CAMERA_STACK_DEB_DIR,BUILD_TB321FU_GPU_SENSOR,TB321FU_GPU_SENSOR_SOURCE_DIR,TB321FU_GPU_SENSOR_BUILD_JOBS,INSTALL_GNOME_SNAPSHOT,INSTALL_FIREFOX,INSTALL_IBUS_CHINESE,IBUS_CHINESE_PACKAGES,DISABLE_SNAPD,REBUILD_TB321FU_CAMERA_GNOME_PLUGIN,CAMERA_PIPEWIRE_VERSION,CAMERA_PIPEWIRE_SOURCE_URL,APPLY_Y700_FIRMWARE_FIXES,APPLY_Y700_AUDIO_POLICY_FIXES,CLEAN_APT_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
             env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" SENSOR_DEB_DIR="${Y700_SENSOR_DEB_DIR:-${SENSOR_DEB_DIR:-}}" HAPTICS_DEB_DIR="${TB321FU_HAPTICS_DEB_DIR:-${HAPTICS_DEB_DIR:-}}" CAMERA_STACK_DEB_DIR="${TB321FU_CAMERA_STACK_DEB_DIR:-}" bash scripts/ci/build-rootfs-image.sh
           sudo chown -R "$USER:$USER" out
+
+      - name: Save rootfs package cache
+        if: steps.build-rootfs.outcome == 'success' && steps.rootfs-package-cache.outcome == 'success' && steps.rootfs-package-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ runner.temp }}/debootstrap-cache
+            ${{ runner.temp }}/rootfs-apt-cache
+          key: ${{ steps.rootfs-package-cache.outputs.cache-primary-key }}
+
+      - name: Save partial rootfs package cache after failure
+        if: always() && steps.build-rootfs.outcome == 'failure' && steps.rootfs-package-cache.outcome == 'success' && steps.rootfs-package-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ runner.temp }}/debootstrap-cache
+            ${{ runner.temp }}/rootfs-apt-cache
+          key: ${{ steps.rootfs-package-cache.outputs.cache-primary-key }}-partial-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Build GRUB boot image
         run: |

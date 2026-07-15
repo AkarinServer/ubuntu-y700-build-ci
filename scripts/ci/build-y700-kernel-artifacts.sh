@@ -67,7 +67,7 @@ trap cleanup EXIT
 ci_log "fetching kernel source $KERNEL_SOURCE_REPOSITORY at $KERNEL_SOURCE_REF"
 git init -q "$source_dir"
 git -C "$source_dir" remote add origin "$KERNEL_SOURCE_REPOSITORY"
-git -C "$source_dir" fetch --depth 1 origin "$KERNEL_SOURCE_REF"
+ci_retry 4 10 git -C "$source_dir" fetch --depth 1 origin "$KERNEL_SOURCE_REF"
 git -C "$source_dir" -c advice.detachedHead=false checkout -q FETCH_HEAD
 
 resolved_ref=$(git -C "$source_dir" rev-parse HEAD)

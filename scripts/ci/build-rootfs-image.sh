@@ -17,11 +17,17 @@ Environment inputs:
   OUTPUT_PREFIX              default: <DISTRO>-<ARCH>
   DISTRO                     default: resolute
   ARCH                       default: arm64
-  MIRROR                     default: http://ports.ubuntu.com/ubuntu-ports
+  MIRROR                     default: https://ports.ubuntu.com/ubuntu-ports
   DEBOOTSTRAP_VARIANT        default: minbase; set empty for debootstrap default
+  DEBOOTSTRAP_CACHE_DIR      optional persistent directory for downloaded .deb files
+  DEBOOTSTRAP_RETRIES        default: 3
   RESOLV_CONF_CONTENT        optional /etc/resolv.conf contents for chroot
   APT_HTTP_PROXY             optional apt proxy used only during provisioning
   APT_HTTPS_PROXY            optional apt https proxy; defaults to APT_HTTP_PROXY
+  APT_FORCE_IPV4             force APT to use IPv4 during provisioning, default: 1
+  APT_RETRIES                APT transport retry count, default: 6
+  APT_TIMEOUT_SECONDS        APT HTTP/HTTPS timeout, default: 30
+  ROOTFS_APT_CACHE_DIR       optional persistent directory for rootfs APT archives
   APT_SOURCES_LIST           optional full sources.list replacement
   ROOTFS_IMAGE_SIZE          default: 14G
   ROOTFS_UUID                optional ext4 UUID
@@ -90,11 +96,17 @@ ci_require_cmd strings
 
 DISTRO=${DISTRO:-resolute}
 ARCH=${ARCH:-arm64}
-MIRROR=${MIRROR:-http://ports.ubuntu.com/ubuntu-ports}
+MIRROR=${MIRROR:-https://ports.ubuntu.com/ubuntu-ports}
 DEBOOTSTRAP_VARIANT=${DEBOOTSTRAP_VARIANT-minbase}
+DEBOOTSTRAP_CACHE_DIR=${DEBOOTSTRAP_CACHE_DIR:-}
+DEBOOTSTRAP_RETRIES=${DEBOOTSTRAP_RETRIES:-3}
 RESOLV_CONF_CONTENT=${RESOLV_CONF_CONTENT:-}
 APT_HTTP_PROXY=${APT_HTTP_PROXY:-${http_proxy:-${HTTP_PROXY:-}}}
 APT_HTTPS_PROXY=${APT_HTTPS_PROXY:-${https_proxy:-${HTTPS_PROXY:-${APT_HTTP_PROXY:-}}}}
+APT_FORCE_IPV4=${APT_FORCE_IPV4:-1}
+APT_RETRIES=${APT_RETRIES:-6}
+APT_TIMEOUT_SECONDS=${APT_TIMEOUT_SECONDS:-30}
+ROOTFS_APT_CACHE_DIR=${ROOTFS_APT_CACHE_DIR:-}
 OUTPUT_PREFIX=${OUTPUT_PREFIX:-${DISTRO}-${ARCH}}
 OUTPUT_DIR=${OUTPUT_DIR:-out/ci-rootfs}
 ROOTFS_IMAGE_SIZE=${ROOTFS_IMAGE_SIZE:-14G}
@@ -142,6 +154,20 @@ CAMERA_PIPEWIRE_SOURCE_URL=${CAMERA_PIPEWIRE_SOURCE_URL:-https://github.com/Pipe
 COMPRESS=${COMPRESS:-7z}
 CHUNK_SIZE=${CHUNK_SIZE:-}
 KEEP_RAW_IMAGE=${KEEP_RAW_IMAGE:-0}
+
+case "$DEBOOTSTRAP_RETRIES" in
+  ''|*[!0-9]*|0) ci_die "DEBOOTSTRAP_RETRIES must be a positive integer" ;;
+esac
+case "$APT_RETRIES" in
+  ''|*[!0-9]*|0) ci_die "APT_RETRIES must be a positive integer" ;;
+esac
+case "$APT_TIMEOUT_SECONDS" in
+  ''|*[!0-9]*|0) ci_die "APT_TIMEOUT_SECONDS must be a positive integer" ;;
+esac
+case "$APT_FORCE_IPV4" in
+  0|1) ;;
+  *) ci_die "APT_FORCE_IPV4 must be 0 or 1" ;;
+esac
 
 default_packages="systemd systemd-sysv dbus sudo locales tzdata ca-certificates gnupg curl wget network-manager openssh-server nano vim rsync kmod initramfs-tools"
 PACKAGE_LIST=${PACKAGE_LIST:-$default_packages}
@@ -225,6 +251,16 @@ rootfs_img="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.img"
 build_info="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.BUILD-INFO.txt"
 manifest="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.manifest"
 mounted=0
+rootfs_apt_cache_mounted=0
+
+if [ -n "$DEBOOTSTRAP_CACHE_DIR" ]; then
+  DEBOOTSTRAP_CACHE_DIR=$(ci_abs_path "$DEBOOTSTRAP_CACHE_DIR")
+  mkdir -p "$DEBOOTSTRAP_CACHE_DIR"
+fi
+if [ -n "$ROOTFS_APT_CACHE_DIR" ]; then
+  ROOTFS_APT_CACHE_DIR=$(ci_abs_path "$ROOTFS_APT_CACHE_DIR")
+  mkdir -p "$ROOTFS_APT_CACHE_DIR"
+fi
 
 apply_y700_firmware_fixes() {
   local root=$1
@@ -510,6 +546,8 @@ MESON
 #!/usr/bin/env bash
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
+. /root/ci-apt-network.sh
+configure_ci_apt_network
 
 if [ -n "${APT_HTTP_PROXY:-}" ] || [ -n "${APT_HTTPS_PROXY:-}" ]; then
   mkdir -p /etc/apt/apt.conf.d
@@ -529,8 +567,8 @@ for pkg in $build_deps; do
   fi
 done
 
-apt-get update
-apt-get install -y --no-install-recommends $build_deps
+ci_apt_retry apt-get update
+ci_apt_retry apt-get install -y --no-install-recommends $build_deps
 meson setup "$build" "$src" \
   --buildtype=release \
   --prefix=/usr \
@@ -565,9 +603,11 @@ if [ -n "$new_build_deps" ]; then
   apt-get purge -y $new_build_deps
   apt-get autoremove -y --purge
 fi
-apt-get clean
+if [ "${PRESERVE_APT_ARCHIVES:-0}" != 1 ]; then
+  apt-get clean
+fi
 rm -rf /var/lib/apt/lists/*
-rm -f /etc/apt/apt.conf.d/99ci-proxy
+rm -f /etc/apt/apt.conf.d/80ci-network /etc/apt/apt.conf.d/99ci-proxy
 CAMERA_PLUGIN_BUILD
   chmod +x "$root/root/ci-build-tb321fu-camera-plugin.sh"
 
@@ -594,6 +634,10 @@ CAMERA_PLUGIN_BUILD
     LANG=C.UTF-8 \
     APT_HTTP_PROXY="$APT_HTTP_PROXY" \
     APT_HTTPS_PROXY="$APT_HTTPS_PROXY" \
+    APT_FORCE_IPV4="$APT_FORCE_IPV4" \
+    APT_RETRIES="$APT_RETRIES" \
+    APT_TIMEOUT_SECONDS="$APT_TIMEOUT_SECONDS" \
+    PRESERVE_APT_ARCHIVES="${ROOTFS_APT_CACHE_DIR:+1}" \
     http_proxy="$APT_HTTP_PROXY" \
     https_proxy="$APT_HTTPS_PROXY" \
     HTTP_PROXY="$APT_HTTP_PROXY" \
@@ -639,6 +683,8 @@ apply_tb321fu_gpu_sensor() {
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
+. /root/ci-apt-network.sh
+configure_ci_apt_network
 
 ci_bool_chroot()
 {
@@ -675,8 +721,8 @@ for pkg in $build_deps; do
   fi
 done
 
-apt-get update
-apt-get install -y --no-install-recommends $build_deps
+ci_apt_retry apt-get update
+ci_apt_retry apt-get install -y --no-install-recommends $build_deps
 
 cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr
 cmake --build "$build" -j"${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}"
@@ -698,9 +744,11 @@ if [ -n "$new_build_deps" ]; then
   apt-get purge -y $new_build_deps
   apt-get autoremove -y --purge
 fi
-apt-get clean
+if [ "${PRESERVE_APT_ARCHIVES:-0}" != 1 ]; then
+  apt-get clean
+fi
 rm -rf /var/lib/apt/lists/*
-rm -f /etc/apt/apt.conf.d/99ci-proxy
+rm -f /etc/apt/apt.conf.d/80ci-network /etc/apt/apt.conf.d/99ci-proxy
 
 test -f "$plugin"
 test ! -e "$stock"
@@ -732,6 +780,10 @@ GPU_SENSOR_BUILD
     LANG=C.UTF-8 \
     APT_HTTP_PROXY="$APT_HTTP_PROXY" \
     APT_HTTPS_PROXY="$APT_HTTPS_PROXY" \
+    APT_FORCE_IPV4="$APT_FORCE_IPV4" \
+    APT_RETRIES="$APT_RETRIES" \
+    APT_TIMEOUT_SECONDS="$APT_TIMEOUT_SECONDS" \
+    PRESERVE_APT_ARCHIVES="${ROOTFS_APT_CACHE_DIR:+1}" \
     http_proxy="$APT_HTTP_PROXY" \
     https_proxy="$APT_HTTPS_PROXY" \
     HTTP_PROXY="$APT_HTTP_PROXY" \
@@ -757,11 +809,18 @@ GPU_SENSOR_BUILD
 cleanup() {
   set +e
   if [ "$mounted" = 1 ]; then
+    if [ "$rootfs_apt_cache_mounted" = 1 ]; then
+      mountpoint -q "$rootfs_dir/var/cache/apt/archives" && umount -l "$rootfs_dir/var/cache/apt/archives"
+      rootfs_apt_cache_mounted=0
+    fi
     for p in dev/pts dev proc sys run; do
       mountpoint -q "$rootfs_dir/$p" && umount -l "$rootfs_dir/$p"
     done
     mountpoint -q "$rootfs_dir" && umount "$rootfs_dir"
   fi
+  for cache_dir in "$DEBOOTSTRAP_CACHE_DIR" "$ROOTFS_APT_CACHE_DIR"; do
+    [ -z "$cache_dir" ] || [ ! -d "$cache_dir" ] || chmod -R a+rX "$cache_dir"
+  done
   rm -rf "$work_dir"
 }
 trap cleanup EXIT
@@ -780,11 +839,23 @@ mount -o loop "$rootfs_img" "$rootfs_dir"
 mounted=1
 
 ci_log "debootstrap $DISTRO/$ARCH from $MIRROR"
-debootstrap_args=(--arch="$ARCH")
+debootstrap_args=(--arch="$ARCH" --include=ca-certificates)
 if [ -n "$DEBOOTSTRAP_VARIANT" ]; then
   debootstrap_args+=(--variant="$DEBOOTSTRAP_VARIANT")
 fi
-debootstrap "${debootstrap_args[@]}" "$DISTRO" "$rootfs_dir" "$MIRROR"
+if [ -n "$DEBOOTSTRAP_CACHE_DIR" ]; then
+  debootstrap_args+=(--cache-dir="$DEBOOTSTRAP_CACHE_DIR")
+fi
+debootstrap_attempt=1
+while ! debootstrap "${debootstrap_args[@]}" "$DISTRO" "$rootfs_dir" "$MIRROR"; do
+  if [ "$debootstrap_attempt" -ge "$DEBOOTSTRAP_RETRIES" ]; then
+    ci_die "debootstrap failed after $debootstrap_attempt attempts"
+  fi
+  ci_log "debootstrap failed (attempt $debootstrap_attempt/$DEBOOTSTRAP_RETRIES); retrying in $((debootstrap_attempt * 15)) seconds"
+  find "$rootfs_dir" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf -- {} +
+  sleep $((debootstrap_attempt * 15))
+  debootstrap_attempt=$((debootstrap_attempt + 1))
+done
 
 if [ -n "${APT_SOURCES_LIST:-}" ]; then
   printf '%s\n' "$APT_SOURCES_LIST" > "$rootfs_dir/etc/apt/sources.list"
@@ -826,17 +897,69 @@ if ! awk '
   printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > "$rootfs_dir/etc/resolv.conf"
 fi
 
+if [ -n "$ROOTFS_APT_CACHE_DIR" ]; then
+  install -d -m 0755 "$rootfs_dir/var/cache/apt/archives" "$ROOTFS_APT_CACHE_DIR"
+  find "$rootfs_dir/var/cache/apt/archives" -maxdepth 1 -type f -name '*.deb' \
+    -exec cp -n -- {} "$ROOTFS_APT_CACHE_DIR/" \;
+  find "$rootfs_dir/var/cache/apt/archives" -maxdepth 1 -type f -name '*.deb' -delete
+  rm -rf "$rootfs_dir/var/cache/apt/archives/partial" "$ROOTFS_APT_CACHE_DIR/partial"
+  rm -f "$ROOTFS_APT_CACHE_DIR/lock"
+  apt_uid=$(awk -F: '$1 == "_apt" { print $3; exit }' "$rootfs_dir/etc/passwd")
+  [ -n "$apt_uid" ] || ci_die "could not determine rootfs _apt uid"
+  install -d -o "$apt_uid" -g 0 -m 0700 "$ROOTFS_APT_CACHE_DIR/partial"
+  mount --bind "$ROOTFS_APT_CACHE_DIR" "$rootfs_dir/var/cache/apt/archives"
+  rootfs_apt_cache_mounted=1
+fi
+
 mount --bind /dev "$rootfs_dir/dev"
 mount --bind /dev/pts "$rootfs_dir/dev/pts"
 mount -t proc proc "$rootfs_dir/proc"
 mount -t sysfs sysfs "$rootfs_dir/sys"
 mount -t tmpfs tmpfs "$rootfs_dir/run"
 
+cat > "$rootfs_dir/root/ci-apt-network.sh" <<'APT_NETWORK'
+configure_ci_apt_network() {
+  mkdir -p /etc/apt/apt.conf.d
+  cat > /etc/apt/apt.conf.d/80ci-network <<APT_CONFIG
+Acquire::Retries "${APT_RETRIES:-6}";
+Acquire::http::Timeout "${APT_TIMEOUT_SECONDS:-30}";
+Acquire::https::Timeout "${APT_TIMEOUT_SECONDS:-30}";
+APT_CONFIG
+  if [ "${APT_FORCE_IPV4:-1}" = 1 ]; then
+    printf 'Acquire::ForceIPv4 "true";\n' >> /etc/apt/apt.conf.d/80ci-network
+  fi
+}
+
+ci_apt_retry() {
+  local attempt=1
+  local max_attempts=3
+  local status
+
+  while true; do
+    if "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      echo "APT command failed after $attempt attempts: $*" >&2
+      return "$status"
+    fi
+    echo "APT command failed (attempt $attempt/$max_attempts); retrying in $((attempt * 10)) seconds: $*" >&2
+    sleep $((attempt * 10))
+    attempt=$((attempt + 1))
+  done
+}
+APT_NETWORK
+chmod 0755 "$rootfs_dir/root/ci-apt-network.sh"
+
 cat > "$rootfs_dir/root/ci-provision.sh" <<'PROVISION'
 #!/usr/bin/env bash
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
+. /root/ci-apt-network.sh
+configure_ci_apt_network
 
 ci_bool_chroot()
 {
@@ -857,8 +980,8 @@ if [ -n "${APT_HTTP_PROXY:-}" ] || [ -n "${APT_HTTPS_PROXY:-}" ]; then
   fi
 fi
 
-apt-get update
-apt-get install -y $PACKAGE_LIST
+ci_apt_retry apt-get update
+ci_apt_retry apt-get install -y $PACKAGE_LIST
 
 if ci_bool_chroot "$INSTALL_FIREFOX"; then
   firefox_version=$(dpkg-query -W -f='${Version}' firefox 2>/dev/null || true)
@@ -972,7 +1095,7 @@ locale-gen || true
 update-locale LANG="$LANG_NAME" || true
 
 if compgen -G "/var/tmp/ci-debs/*.deb" >/dev/null; then
-  dpkg -i --force-overwrite /var/tmp/ci-debs/*.deb || apt-get -f install -y
+  dpkg -i --force-overwrite /var/tmp/ci-debs/*.deb || ci_apt_retry apt-get -f install -y
 fi
 
 for ci_overlay in /var/tmp/ci-debs/*.tar /var/tmp/ci-debs/*.tar.gz /var/tmp/ci-debs/*.tgz /var/tmp/ci-debs/*.tar.xz /var/tmp/ci-debs/*.tar.zst; do
@@ -1005,10 +1128,12 @@ else
 fi
 
 if [ "$CLEAN_APT_CACHE" = 1 ]; then
-  apt-get clean
+  if [ "${PRESERVE_APT_ARCHIVES:-0}" != 1 ]; then
+    apt-get clean
+  fi
   rm -rf /var/lib/apt/lists/*
 fi
-rm -f /etc/apt/apt.conf.d/99ci-proxy
+rm -f /etc/apt/apt.conf.d/80ci-network /etc/apt/apt.conf.d/99ci-proxy
 
 rm -f /etc/machine-id
 touch /etc/machine-id
@@ -1073,6 +1198,10 @@ chroot "$rootfs_dir" env -i \
   LANG_NAME="$LANG_NAME" \
   APT_HTTP_PROXY="$APT_HTTP_PROXY" \
   APT_HTTPS_PROXY="$APT_HTTPS_PROXY" \
+  APT_FORCE_IPV4="$APT_FORCE_IPV4" \
+  APT_RETRIES="$APT_RETRIES" \
+  APT_TIMEOUT_SECONDS="$APT_TIMEOUT_SECONDS" \
+  PRESERVE_APT_ARCHIVES="${ROOTFS_APT_CACHE_DIR:+1}" \
   http_proxy="$APT_HTTP_PROXY" \
   https_proxy="$APT_HTTPS_PROXY" \
   HTTP_PROXY="$APT_HTTP_PROXY" \
@@ -1116,6 +1245,7 @@ if ci_bool "$BUILD_TB321FU_GPU_SENSOR"; then
   apply_tb321fu_gpu_sensor "$rootfs_dir"
 fi
 apply_gnome_desktop_cleanup "$rootfs_dir"
+rm -f "$rootfs_dir/root/ci-apt-network.sh"
 
 cat > "$build_info" <<INFO
 generated=$(date -u -Iseconds)
@@ -1167,6 +1297,10 @@ ci_log "writing manifest"
 for p in dev/pts dev proc sys run; do
   mountpoint -q "$rootfs_dir/$p" && umount -l "$rootfs_dir/$p"
 done
+if [ "$rootfs_apt_cache_mounted" = 1 ]; then
+  umount "$rootfs_dir/var/cache/apt/archives"
+  rootfs_apt_cache_mounted=0
+fi
 umount "$rootfs_dir"
 mounted=0
 e2fsck -f -y "$rootfs_img"

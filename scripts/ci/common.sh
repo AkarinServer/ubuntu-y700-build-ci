@@ -28,13 +28,55 @@ ci_abs_path() {
   esac
 }
 
+ci_retry() {
+  local max_attempts=$1
+  local base_delay=$2
+  local attempt=1
+  local status
+  shift 2
+
+  while true; do
+    if "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      ci_log "command failed after $attempt attempts: $*"
+      return "$status"
+    fi
+    ci_log "command failed (attempt $attempt/$max_attempts); retrying in $((base_delay * attempt)) seconds: $*"
+    sleep $((base_delay * attempt))
+    attempt=$((attempt + 1))
+  done
+}
+
 ci_download() {
   local src=$1
   local dst=$2
+  local tmp
   case "$src" in
     http://*|https://*)
       ci_require_cmd curl
-      curl -fL --retry 3 --retry-delay 2 -o "$dst" "$src"
+      tmp="${dst}.part"
+      rm -f "$tmp"
+      if ! curl \
+        --fail \
+        --location \
+        --ipv4 \
+        --retry 8 \
+        --retry-all-errors \
+        --retry-delay 3 \
+        --retry-max-time 300 \
+        --connect-timeout 20 \
+        --speed-time 60 \
+        --speed-limit 1024 \
+        --output "$tmp" \
+        "$src"; then
+        rm -f "$tmp"
+        return 1
+      fi
+      mv "$tmp" "$dst"
       ;;
     '')
       ci_die "empty download source for $dst"
