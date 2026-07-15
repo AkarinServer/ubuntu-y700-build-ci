@@ -20,7 +20,7 @@ Environment inputs:
   DTB_NAME                      default: sm8650-lenovo-tb321fu.dtb
 
 The base configuration is preserved except for enabling AppArmor, adding
-AppArmor to CONFIG_LSM, and enabling SquashFS XZ/Zstandard decompression.
+AppArmor to CONFIG_LSM, and enabling SquashFS XZ/Zstandard/LZO decompression.
 USAGE
 }
 
@@ -96,6 +96,7 @@ esac
   --enable SECURITY_APPARMOR \
   --enable SQUASHFS_XZ \
   --enable SQUASHFS_ZSTD \
+  --enable SQUASHFS_LZO \
   --set-str LSM "$lsm_list"
 
 commit_epoch=$(git -C "$source_dir" show -s --format=%ct HEAD)
@@ -119,6 +120,7 @@ grep -qx 'CONFIG_SECURITY_NETWORK=y' "$build_dir/.config" || ci_die "AppArmor ne
 grep -qx 'CONFIG_SECURITY_PATH=y' "$build_dir/.config" || ci_die "AppArmor path hooks were not enabled"
 grep -qx 'CONFIG_SQUASHFS_XZ=y' "$build_dir/.config" || ci_die "SquashFS XZ decompression was not enabled"
 grep -qx 'CONFIG_SQUASHFS_ZSTD=y' "$build_dir/.config" || ci_die "SquashFS Zstandard decompression was not enabled"
+grep -qx 'CONFIG_SQUASHFS_LZO=y' "$build_dir/.config" || ci_die "SquashFS LZO decompression was not enabled"
 grep -q '^CONFIG_LSM="[^"]*apparmor[^"]*"$' "$build_dir/.config" || ci_die "AppArmor is missing from CONFIG_LSM"
 
 ci_log "building arm64 Image and $DTB_NAME with $KERNEL_BUILD_JOBS jobs"
@@ -152,6 +154,7 @@ snap_config_security_apparmor=y
 snap_config_lsm=$lsm_list
 snap_config_squashfs_xz=y
 snap_config_squashfs_zstd=y
+snap_config_squashfs_lzo=y
 INFO
 
 (cd "$payload_dir" && sha256sum BUILD-INFO.txt Image kernel.config "$DTB_NAME" > SHA256SUMS)
