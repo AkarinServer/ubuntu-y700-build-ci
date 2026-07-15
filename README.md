@@ -105,7 +105,7 @@ DTB_NAME=sm8650-lenovo-tb321fu.dtb
 ## Scripts
 
 - `scripts/ci/build-rootfs-image.sh`: builds an ext4 rootfs image from debootstrap plus declared overlays/debs.
-- `scripts/ci/build-y700-kernel-artifacts.sh`: rebuilds the verified TB321FU kernel commit with AppArmor and SquashFS XZ/Zstandard support for Snap.
+- `scripts/ci/build-y700-kernel-artifacts.sh`: rebuilds the verified TB321FU kernel commit with the Snap confinement baseline, all in-tree SquashFS decompressors, and Ubuntu-compatible AppArmor v2 network policy support.
 - `scripts/ci/build-grub-image.sh`: builds a FAT boot image containing BOOTAA64.EFI, a prebuilt or generated QCOMRAMP.EFI, Image, DTB and GRUB config.
 - `scripts/ci/build-tb321fu-camera-stack-deb.sh`: builds the live-verified TB321FU camera stack deb from `source/tb321fu-camera-rootfs-overlay` or an explicit camera overlay archive.
 - `scripts/ci/pack-disk-image.sh`: optional GPT disk image packer for a FAT boot image plus ext4 rootfs image.
@@ -132,7 +132,9 @@ New releases created by the workflow are normal GitHub Releases, not prereleases
 
 The default rootfs uses the Ubuntu GNOME session with GDM and enables Snap support through `snapd`, AppArmor, GNOME Software, and the GNOME Software Snap plugin. Snap applications are installed after the device boots; the rootfs builder does not attempt to run the Snap daemon inside the provisioning chroot.
 
-The bootstrap kernel artifact supplies the verified TB321FU base configuration. By default, the workflow fetches the exact matching public source commit from `GUF296/linux`, enables `CONFIG_SECURITY_APPARMOR=y`, `CONFIG_SQUASHFS_XZ=y`, and `CONFIG_SQUASHFS_ZSTD=y`, adds `apparmor` to `CONFIG_LSM`, and rebuilds `Image` plus the TB321FU DTB. GRUB is then packaged with this rebuilt kernel instead of the bootstrap binary. The kernel archive and its checksums are included in the Actions artifact.
+The bootstrap kernel artifact supplies the verified TB321FU base configuration. By default, the workflow fetches the exact matching public source commit from `GUF296/linux`, enables AppArmor, seccomp, namespaces, loop devices, tmpfs, memory/block/device/PID/freezer/BPF cgroups, and every in-tree SquashFS decompressor (`ZLIB`, `LZ4`, `LZO`, `XZ`, and `ZSTD`) with xattrs. It also adds `apparmor` to `CONFIG_LSM`. The upstream source exposes `network_v8` and `network_v9` but not the legacy top-level AppArmor `network` feature expected by snapd, so the build automatically applies `patches/kernel/0001-apparmor-v2-network-compat.patch`, adapted from Ubuntu's AppArmor compatibility implementation. The build fails if the patch cannot be applied or if any required Kconfig option is dropped by `olddefconfig`.
+
+The resulting `BUILD-INFO.txt` records whether the AppArmor network compatibility came from the source or the bundled patch, plus the applied patch checksum. GRUB is packaged with this rebuilt kernel instead of the bootstrap binary. The kernel archive and its checksums are included in the Actions artifact.
 
 Set `BUILD_Y700_KERNEL=0` in `source_config` only when intentionally supplying a replacement `KERNEL_ARTIFACT_ARCHIVE` that already has the required Snap kernel features.
 

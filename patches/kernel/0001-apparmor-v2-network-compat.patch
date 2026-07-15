@@ -1,0 +1,222 @@
+Subject: [PATCH] apparmor: restore v2 network-policy compatibility for snapd
+
+Adapt Canonical's Ubuntu AppArmor v2 network compatibility change
+(Ubuntu kernel commit f1e158f349218cd7ef1078df13ac8f155adf47c7) to
+GUF296/linux commit 5df8e852ea722929f5359a5ef28ebcec0c4443fd.
+
+The upstream AppArmor ABI exposes network_v8/network_v9. Snapd also probes
+the legacy top-level network feature and Ubuntu kernels retain the matching
+v2 policy unpacking and enforcement path.
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index ededaf46f3ca..4827eeb6829c 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -2472,6 +2472,7 @@ static struct aa_sfs_entry aa_sfs_entry_features[] = {
+ 	AA_SFS_DIR("file",			aa_sfs_entry_file),
+ 	AA_SFS_DIR("network_v8",		aa_sfs_entry_network),
+ 	AA_SFS_DIR("network_v9",		aa_sfs_entry_networkv9),
++	AA_SFS_DIR("network",			aa_sfs_entry_network_compat),
+ 	AA_SFS_DIR("mount",			aa_sfs_entry_mount),
+ 	AA_SFS_DIR("namespaces",		aa_sfs_entry_ns),
+ 	AA_SFS_FILE_U64("capability",		VFS_CAP_FLAGS_MASK),
+diff --git a/security/apparmor/include/apparmor.h b/security/apparmor/include/apparmor.h
+index cc6e3df1bc62..f044c34ce8fa 100644
+--- a/security/apparmor/include/apparmor.h
++++ b/security/apparmor/include/apparmor.h
+@@ -20,7 +20,7 @@
+ #define AA_CLASS_UNKNOWN	1
+ #define AA_CLASS_FILE		2
+ #define AA_CLASS_CAP		3
+-#define AA_CLASS_DEPRECATED	4
++#define AA_CLASS_NET_COMPAT	4
+ #define AA_CLASS_RLIMITS	5
+ #define AA_CLASS_DOMAIN		6
+ #define AA_CLASS_MOUNT		7
+diff --git a/security/apparmor/include/net.h b/security/apparmor/include/net.h
+index 0d0b0ce42723..38110ff6952b 100644
+--- a/security/apparmor/include/net.h
++++ b/security/apparmor/include/net.h
+@@ -74,6 +74,12 @@ static inline struct aa_sk_ctx *aa_sock(const struct sock *sk)
+ 	DEFINE_AUDIT_NET(NAME, OP, CRED, SK, (SK)->sk_family, (SK)->sk_type, \
+ 			 (SK)->sk_protocol)
+ 
++/* AppArmor 2.x address-family/socket-type permissions. */
++struct aa_net_compat {
++	u16 allow[AF_MAX];
++	u16 audit[AF_MAX];
++	u16 quiet[AF_MAX];
++};
+ 
+ struct aa_secmark {
+ 	u8 audit;
+@@ -84,6 +90,7 @@ struct aa_secmark {
+ 
+ extern struct aa_sfs_entry aa_sfs_entry_network[];
+ extern struct aa_sfs_entry aa_sfs_entry_networkv9[];
++extern struct aa_sfs_entry aa_sfs_entry_network_compat[];
+ 
+ int aa_do_perms(struct aa_profile *profile, struct aa_policydb *policy,
+ 		aa_state_t state, u32 request, struct aa_perms *p,
+diff --git a/security/apparmor/include/policy.h b/security/apparmor/include/policy.h
+index 3895f8774a3f..3c4ad4111603 100644
+--- a/security/apparmor/include/policy.h
++++ b/security/apparmor/include/policy.h
+@@ -269,6 +269,7 @@ struct aa_profile {
+ 	const char *disconnected;
+ 
+ 	struct aa_attachment attach;
++	struct aa_net_compat *net_compat;
+ 
+ 	struct aa_loaddata *rawdata;
+ 	unsigned char *hash;
+diff --git a/security/apparmor/net.c b/security/apparmor/net.c
+index 44c04102062f..949d2f7ecbfe 100644
+--- a/security/apparmor/net.c
++++ b/security/apparmor/net.c
+@@ -31,6 +31,11 @@ struct aa_sfs_entry aa_sfs_entry_networkv9[] = {
+ 	{ }
+ };
+ 
++struct aa_sfs_entry aa_sfs_entry_network_compat[] = {
++	AA_SFS_FILE_STRING("af_mask",	AA_SFS_AF_MASK),
++	{ }
++};
++
+ static const char * const net_mask_names[] = {
+ 	"unknown",
+ 	"send",
+@@ -252,6 +257,7 @@ int aa_profile_af_perm(struct aa_profile *profile,
+ 		       int type, int protocol)
+ {
+ 	struct aa_ruleset *rules = profile->label.rules[0];
++	struct aa_perms compat_perms = { };
+ 	struct aa_perms *p = NULL;
+ 	aa_state_t state;
+ 
+@@ -262,10 +268,24 @@ int aa_profile_af_perm(struct aa_profile *profile,
+ 	if (profile_unconfined(profile))
+ 		return 0;
+ 	state = RULE_MEDIATES_NET(rules);
+-	if (!state)
++	if (state) {
++		state = aa_match_to_prot(rules->policy, state, request, family,
++					 type, protocol, &p, &ad->info);
++	} else if (profile->net_compat) {
++		/* AppArmor 2.x socket mediation compatibility. */
++		compat_perms.allow =
++			(profile->net_compat->allow[family] & (1 << type)) ?
++			ALL_PERMS_MASK : 0;
++		compat_perms.audit =
++			(profile->net_compat->audit[family] & (1 << type)) ?
++			ALL_PERMS_MASK : 0;
++		compat_perms.quiet =
++			(profile->net_compat->quiet[family] & (1 << type)) ?
++			ALL_PERMS_MASK : 0;
++		p = &compat_perms;
++	} else {
+ 		return 0;
+-	state = aa_match_to_prot(rules->policy, state, request, family, type,
+-				 protocol, &p, &ad->info);
++	}
+ 	return aa_do_perms(profile, rules->policy, state, request, p, ad);
+ }
+ 
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index b6a5eb4021db..16f1155e82c4 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -332,6 +332,7 @@ void aa_free_profile(struct aa_profile *profile)
+ 	kfree_sensitive(profile->disconnected);
+ 
+ 	free_attachment(&profile->attach);
++	kfree_sensitive(profile->net_compat);
+ 
+ 	/*
+ 	 * at this point there are no tasks that can have a reference
+diff --git a/security/apparmor/policy_unpack.c b/security/apparmor/policy_unpack.c
+index 9f45d5513d2c..0a46644a2a8b 100644
+--- a/security/apparmor/policy_unpack.c
++++ b/security/apparmor/policy_unpack.c
+@@ -25,6 +25,7 @@
+ #include "include/crypto.h"
+ #include "include/file.h"
+ #include "include/match.h"
++#include "include/net.h"
+ #include "include/path.h"
+ #include "include/policy.h"
+ #include "include/policy_unpack.h"
+@@ -306,6 +307,24 @@ VISIBLE_IF_KUNIT bool aa_unpack_u32(struct aa_ext *e, u32 *data, const char *nam
+ }
+ EXPORT_SYMBOL_IF_KUNIT(aa_unpack_u32);
+ 
++static bool unpack_u16(struct aa_ext *e, u16 *data, const char *name)
++{
++	void *pos = e->pos;
++
++	if (aa_unpack_nameX(e, AA_U16, name)) {
++		if (!aa_inbounds(e, sizeof(u16)))
++			goto fail;
++		if (data)
++			*data = le16_to_cpu(get_unaligned((__le16 *)e->pos));
++		e->pos += sizeof(u16);
++		return true;
++	}
++
++fail:
++	e->pos = pos;
++	return false;
++}
++
+ VISIBLE_IF_KUNIT bool aa_unpack_u64(struct aa_ext *e, u64 *data, const char *name)
+ {
+ 	void *pos = e->pos;
+@@ -1124,6 +1143,7 @@ static struct aa_profile *unpack_profile(struct aa_ext *e, char **ns_name)
+ 	int error = -EPROTO;
+ 	kernel_cap_t tmpcap;
+ 	u32 tmp;
++	u16 size = 0;
+ 
+ 	*ns_name = NULL;
+ 
+@@ -1295,6 +1315,40 @@ static struct aa_profile *unpack_profile(struct aa_ext *e, char **ns_name)
+ 		goto fail;
+ 	}
+ 
++	if (aa_unpack_array(e, "net_allowed_af", &size) ||
++	    VERSION_LT(e->version, v8)) {
++		u16 i;
++
++		profile->net_compat = kzalloc(sizeof(struct aa_net_compat),
++					      GFP_KERNEL);
++		if (!profile->net_compat) {
++			info = "out of memory";
++			error = -ENOMEM;
++			goto fail;
++		}
++		for (i = 0; i < size; i++) {
++			if (i >= AF_MAX) {
++				u16 discard;
++
++				if (!unpack_u16(e, &discard, NULL) ||
++				    !unpack_u16(e, &discard, NULL) ||
++				    !unpack_u16(e, &discard, NULL))
++					goto fail;
++				continue;
++			}
++			if (!unpack_u16(e, &profile->net_compat->allow[i], NULL) ||
++			    !unpack_u16(e, &profile->net_compat->audit[i], NULL) ||
++			    !unpack_u16(e, &profile->net_compat->quiet[i], NULL))
++				goto fail;
++		}
++		if (size && !aa_unpack_nameX(e, AA_ARRAYEND, NULL))
++			goto fail;
++		if (VERSION_LT(e->version, v7)) {
++			profile->net_compat->allow[AF_UNIX] = 0xffff;
++			profile->net_compat->allow[AF_NETLINK] = 0xffff;
++		}
++	}
++
+ 	if (aa_unpack_nameX(e, AA_STRUCT, "policydb")) {
+ 		/* generic policy dfa - optional and may be NULL */
+ 		info = "failed to unpack policydb";
