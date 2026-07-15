@@ -20,7 +20,8 @@ Environment inputs:
   DTB_NAME                      default: sm8650-lenovo-tb321fu.dtb
 
 The base configuration is preserved except for enabling AppArmor, adding
-AppArmor to CONFIG_LSM, and enabling SquashFS XZ/Zstandard/LZO decompression.
+AppArmor to CONFIG_LSM, and enabling SquashFS XZ/Zstandard/LZO decompression
+with xattr support.
 USAGE
 }
 
@@ -94,6 +95,8 @@ esac
 
 "$source_dir/scripts/config" --file "$build_dir/.config" \
   --enable SECURITY_APPARMOR \
+  --enable SQUASHFS \
+  --enable SQUASHFS_XATTR \
   --enable SQUASHFS_XZ \
   --enable SQUASHFS_ZSTD \
   --enable SQUASHFS_LZO \
@@ -118,6 +121,7 @@ make "${make_args[@]}" olddefconfig
 grep -qx 'CONFIG_SECURITY_APPARMOR=y' "$build_dir/.config" || ci_die "AppArmor was not enabled by Kconfig"
 grep -qx 'CONFIG_SECURITY_NETWORK=y' "$build_dir/.config" || ci_die "AppArmor networking hooks were not enabled"
 grep -qx 'CONFIG_SECURITY_PATH=y' "$build_dir/.config" || ci_die "AppArmor path hooks were not enabled"
+grep -qx 'CONFIG_SQUASHFS_XATTR=y' "$build_dir/.config" || ci_die "SquashFS xattr support was not enabled"
 grep -qx 'CONFIG_SQUASHFS_XZ=y' "$build_dir/.config" || ci_die "SquashFS XZ decompression was not enabled"
 grep -qx 'CONFIG_SQUASHFS_ZSTD=y' "$build_dir/.config" || ci_die "SquashFS Zstandard decompression was not enabled"
 grep -qx 'CONFIG_SQUASHFS_LZO=y' "$build_dir/.config" || ci_die "SquashFS LZO decompression was not enabled"
@@ -152,6 +156,7 @@ build_jobs=$KERNEL_BUILD_JOBS
 base_config_archive=$KERNEL_BASE_CONFIG_ARCHIVE
 snap_config_security_apparmor=y
 snap_config_lsm=$lsm_list
+snap_config_squashfs_xattr=y
 snap_config_squashfs_xz=y
 snap_config_squashfs_zstd=y
 snap_config_squashfs_lzo=y
