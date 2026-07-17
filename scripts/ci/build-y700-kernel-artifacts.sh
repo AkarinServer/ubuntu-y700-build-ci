@@ -20,13 +20,15 @@ Environment inputs:
   KERNEL_BUILD_JOBS             default: number of online processors
   KERNEL_CCACHE_DIR             optional persistent ccache directory
   KERNEL_CCACHE_MAXSIZE         default: 4G
+  KERNEL_IMAGE_LOAD_LIMIT       exclusive ARM64 Image load-size limit, default: 58720256 (56 MiB)
   CROSS_COMPILE                 default: aarch64-linux-gnu-
   DTB_NAME                      default: sm8650-lenovo-tb321fu.dtb
 
 The base configuration is preserved except for enabling the AppArmor and
 SquashFS features required by Snap, plus Binder, BinderFS, memfd, namespaces,
 cgroups, PSI, bridge/veth networking, and the built-in legacy iptables/XFRM
-features required by the Waydroid host and Android netd.
+features required by the Waydroid host and Android netd. KALLSYMS_ALL is
+disabled to keep the direct-boot Image below the QCOMRAMP load boundary.
 USAGE
 }
 
@@ -35,7 +37,7 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   exit 0
 fi
 
-for cmd in git make tar sha256sum sed grep nproc find install date; do
+for cmd in git make tar sha256sum sed grep nproc find install date od tr; do
   ci_require_cmd "$cmd"
 done
 
@@ -48,6 +50,7 @@ kernel_config_fragment_source=$KERNEL_CONFIG_FRAGMENT
 KERNEL_BUILD_JOBS=${KERNEL_BUILD_JOBS:-$(nproc)}
 KERNEL_CCACHE_DIR=${KERNEL_CCACHE_DIR:-}
 KERNEL_CCACHE_MAXSIZE=${KERNEL_CCACHE_MAXSIZE:-4G}
+KERNEL_IMAGE_LOAD_LIMIT=${KERNEL_IMAGE_LOAD_LIMIT:-58720256}
 CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-}
 DTB_NAME=${DTB_NAME:-sm8650-lenovo-tb321fu.dtb}
 
@@ -56,6 +59,10 @@ DTB_NAME=${DTB_NAME:-sm8650-lenovo-tb321fu.dtb}
 case "$KERNEL_BUILD_JOBS" in
   ''|*[!0-9]*) ci_die "KERNEL_BUILD_JOBS must be a positive integer" ;;
   0) ci_die "KERNEL_BUILD_JOBS must be greater than zero" ;;
+esac
+case "$KERNEL_IMAGE_LOAD_LIMIT" in
+  ''|*[!0-9]*) ci_die "KERNEL_IMAGE_LOAD_LIMIT must be a positive integer in bytes" ;;
+  0) ci_die "KERNEL_IMAGE_LOAD_LIMIT must be greater than zero" ;;
 esac
 
 ci_require_cmd "${CROSS_COMPILE}gcc"
@@ -173,6 +180,7 @@ esac
   --enable BRIDGE \
   --enable BRIDGE_NETFILTER \
   --enable VETH \
+  --disable KALLSYMS_ALL \
   --enable SECURITY_APPARMOR \
   --enable SQUASHFS \
   --enable SQUASHFS_XATTR \
@@ -289,6 +297,17 @@ dtb_file="$build_dir/arch/arm64/boot/dts/qcom/$DTB_NAME"
 [ -s "$kernel_image" ] || ci_die "kernel Image was not produced"
 [ -s "$dtb_file" ] || ci_die "$DTB_NAME was not produced"
 
+arm64_image_magic=$(od -An -tx1 -j56 -N4 "$kernel_image" | tr -d '[:space:]')
+[ "$arm64_image_magic" = 41524d64 ] || ci_die "kernel Image does not contain a valid ARM64 Image header"
+arm64_image_load_size=$(od -An -tu8 -j16 -N8 "$kernel_image" | tr -d '[:space:]')
+case "$arm64_image_load_size" in
+  ''|*[!0-9]*) ci_die "could not read the load size from the ARM64 Image header" ;;
+esac
+ci_log "ARM64 Image load size: $arm64_image_load_size bytes; QCOMRAMP limit: less than $KERNEL_IMAGE_LOAD_LIMIT bytes"
+if (( arm64_image_load_size >= KERNEL_IMAGE_LOAD_LIMIT )); then
+  ci_die "ARM64 Image load size $arm64_image_load_size reaches or exceeds the QCOMRAMP direct-boot limit $KERNEL_IMAGE_LOAD_LIMIT"
+fi
+
 kernel_release=$(make -s "${make_args[@]}" kernelrelease)
 kernel_describe=$(git -C "$source_dir" describe --always --dirty --tags)
 archive_name="y700-kernel-artifacts-${kernel_release}-snap.tar.gz"
@@ -311,6 +330,9 @@ base_config_archive=$KERNEL_BASE_CONFIG_ARCHIVE
 config_fragment=$kernel_config_fragment_source
 config_fragment_sha256=$kernel_config_fragment_sha256
 ccache_enabled=$([ -n "$KERNEL_CCACHE_DIR" ] && printf yes || printf no)
+arm64_image_load_size=$arm64_image_load_size
+arm64_image_load_limit=$KERNEL_IMAGE_LOAD_LIMIT
+kallsyms_all=$(grep -qx 'CONFIG_KALLSYMS_ALL=y' "$build_dir/.config" && printf y || printf n)
 waydroid_config_android_binder_ipc=y
 waydroid_config_android_binderfs=y
 waydroid_config_android_binder_devices=binder,hwbinder,vndbinder
