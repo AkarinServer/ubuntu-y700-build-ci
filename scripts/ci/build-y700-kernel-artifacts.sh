@@ -17,6 +17,7 @@ Environment inputs:
   KERNEL_SOURCE_REF             default: 5df8e852ea722929f5359a5ef28ebcec0c4443fd
   KERNEL_BASE_CONFIG_ARCHIVE    required URL/path containing kernel.config
   KERNEL_CONFIG_FRAGMENT        optional local Kconfig fragment applied after required features
+  KERNEL_LOCALVERSION           default: -waydroid; keeps matching modules separate from the bootstrap kernel
   KERNEL_BUILD_JOBS             default: number of online processors
   KERNEL_CCACHE_DIR             optional persistent ccache directory
   KERNEL_CCACHE_MAXSIZE         default: 4G
@@ -25,8 +26,9 @@ Environment inputs:
 
 The base configuration is preserved except for enabling the AppArmor and
 SquashFS features required by Snap, plus Binder, BinderFS, memfd, namespaces,
-cgroups, PSI, bridge/veth networking, and the legacy iptables features that do
-not change the ABI of the kernel modules already installed in the rootfs.
+cgroups, PSI, bridge/veth networking, and the Android netd legacy iptables
+features required by Waydroid. Boot-critical networking remains built in;
+netd-only extensions are built as modules and shipped in a matching archive.
 USAGE
 }
 
@@ -35,7 +37,7 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   exit 0
 fi
 
-for cmd in git make tar sha256sum sed grep nproc find install date; do
+for cmd in git make tar zstd sha256sum sed grep nproc find install date depmod; do
   ci_require_cmd "$cmd"
 done
 
@@ -45,6 +47,7 @@ KERNEL_SOURCE_REF=${KERNEL_SOURCE_REF:-5df8e852ea722929f5359a5ef28ebcec0c4443fd}
 KERNEL_BASE_CONFIG_ARCHIVE=${KERNEL_BASE_CONFIG_ARCHIVE:-}
 KERNEL_CONFIG_FRAGMENT=${KERNEL_CONFIG_FRAGMENT:-}
 kernel_config_fragment_source=$KERNEL_CONFIG_FRAGMENT
+KERNEL_LOCALVERSION=${KERNEL_LOCALVERSION:--waydroid}
 KERNEL_BUILD_JOBS=${KERNEL_BUILD_JOBS:-$(nproc)}
 KERNEL_CCACHE_DIR=${KERNEL_CCACHE_DIR:-}
 KERNEL_CCACHE_MAXSIZE=${KERNEL_CCACHE_MAXSIZE:-4G}
@@ -53,6 +56,8 @@ DTB_NAME=${DTB_NAME:-sm8650-lenovo-tb321fu.dtb}
 
 [ -n "$KERNEL_BASE_CONFIG_ARCHIVE" ] || ci_die "KERNEL_BASE_CONFIG_ARCHIVE is required"
 [ -z "$KERNEL_CONFIG_FRAGMENT" ] || [ -f "$KERNEL_CONFIG_FRAGMENT" ] || ci_die "KERNEL_CONFIG_FRAGMENT does not exist: $KERNEL_CONFIG_FRAGMENT"
+printf '%s\n' "$KERNEL_LOCALVERSION" | grep -Eq '^-[A-Za-z0-9][A-Za-z0-9._-]*$' || \
+  ci_die "KERNEL_LOCALVERSION must start with '-' and contain only letters, numbers, dot, underscore, and dash"
 case "$KERNEL_BUILD_JOBS" in
   ''|*[!0-9]*) ci_die "KERNEL_BUILD_JOBS must be a positive integer" ;;
   0) ci_die "KERNEL_BUILD_JOBS must be greater than zero" ;;
@@ -79,6 +84,7 @@ source_dir="$work_dir/linux"
 build_dir="$work_dir/build"
 base_config_dir="$work_dir/base-config"
 payload_dir="$work_dir/payload"
+modules_stage="$work_dir/modules-stage"
 
 if [ -n "$KERNEL_CCACHE_DIR" ]; then
   export CCACHE_BASEDIR=$work_dir
@@ -120,6 +126,7 @@ case ",$lsm_list," in
 esac
 
 "$source_dir/scripts/config" --file "$build_dir/.config" \
+  --set-str LOCALVERSION "$KERNEL_LOCALVERSION" \
   --enable ANDROID_BINDER_IPC \
   --enable ANDROID_BINDERFS \
   --set-str ANDROID_BINDER_DEVICES "binder,hwbinder,vndbinder" \
@@ -140,33 +147,37 @@ esac
   --enable NF_CONNTRACK \
   --enable NF_DEFRAG_IPV4 \
   --enable NF_NAT \
-  --enable NETFILTER_NETLINK_LOG \
-  --enable NF_CT_NETLINK \
-  --enable NETFILTER_XT_MARK \
+  --module XFRM_USER \
+  --module NETFILTER_NETLINK_LOG \
+  --module NF_CT_NETLINK \
+  --module NETFILTER_XT_CONNMARK \
+  --module NETFILTER_XT_MARK \
   --enable NETFILTER_XT_TARGET_CHECKSUM \
   --enable NETFILTER_XT_TARGET_MASQUERADE \
-  --enable NETFILTER_XT_TARGET_NFLOG \
-  --enable NETFILTER_XT_TARGET_TCPMSS \
-  --enable NETFILTER_XT_MATCH_BPF \
-  --enable NETFILTER_XT_MATCH_COMMENT \
+  --module NETFILTER_XT_TARGET_NFLOG \
+  --module NETFILTER_XT_TARGET_TCPMSS \
+  --module NETFILTER_XT_MATCH_BPF \
+  --module NETFILTER_XT_MATCH_COMMENT \
   --enable NETFILTER_XT_MATCH_CONNTRACK \
-  --enable NETFILTER_XT_MATCH_LIMIT \
-  --enable NETFILTER_XT_MATCH_OWNER \
-  --enable NETFILTER_XT_MATCH_SOCKET \
-  --enable NETFILTER_XT_MATCH_STATE \
+  --module NETFILTER_XT_MATCH_LIMIT \
+  --module NETFILTER_XT_MATCH_OWNER \
+  --module NETFILTER_XT_MATCH_POLICY \
+  --module NETFILTER_XT_MATCH_SOCKET \
+  --module NETFILTER_XT_MATCH_STATE \
+  --module NETFILTER_XT_MATCH_U32 \
   --enable IP_NF_IPTABLES \
   --enable IP_NF_FILTER \
-  --enable IP_NF_TARGET_REJECT \
+  --module IP_NF_TARGET_REJECT \
   --enable IP_NF_NAT \
   --enable IP_NF_MANGLE \
-  --enable IP_NF_RAW \
-  --enable IP6_NF_IPTABLES_LEGACY \
-  --enable IP6_NF_IPTABLES \
-  --enable IP6_NF_FILTER \
-  --enable IP6_NF_TARGET_REJECT \
-  --enable IP6_NF_MANGLE \
-  --enable IP6_NF_RAW \
-  --enable IP6_NF_MATCH_RPFILTER \
+  --module IP_NF_RAW \
+  --module IP6_NF_IPTABLES_LEGACY \
+  --module IP6_NF_IPTABLES \
+  --module IP6_NF_FILTER \
+  --module IP6_NF_TARGET_REJECT \
+  --module IP6_NF_MANGLE \
+  --module IP6_NF_RAW \
+  --module IP6_NF_MATCH_RPFILTER \
   --enable BRIDGE \
   --enable BRIDGE_NETFILTER \
   --enable VETH \
@@ -209,6 +220,7 @@ ci_log "normalizing kernel configuration"
 make "${make_args[@]}" olddefconfig
 lsm_list=$(sed -n 's/^CONFIG_LSM="\(.*\)"$/\1/p' "$build_dir/.config" | head -n1)
 
+grep -Fqx "CONFIG_LOCALVERSION=\"$KERNEL_LOCALVERSION\"" "$build_dir/.config" || ci_die "the dedicated kernel local version was not preserved by Kconfig"
 grep -qx 'CONFIG_ANDROID_BINDER_IPC=y' "$build_dir/.config" || ci_die "Android Binder IPC was not enabled by Kconfig"
 grep -qx 'CONFIG_ANDROID_BINDERFS=y' "$build_dir/.config" || ci_die "Android BinderFS was not enabled by Kconfig"
 grep -qx 'CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"' "$build_dir/.config" || ci_die "Android Binder device list is incorrect"
@@ -228,41 +240,42 @@ grep -qx 'CONFIG_NETFILTER_XTABLES_LEGACY=y' "$build_dir/.config" || ci_die "leg
 grep -qx 'CONFIG_IP_NF_IPTABLES_LEGACY=y' "$build_dir/.config" || ci_die "legacy IPv4 iptables support required by Waydroid was not built into the kernel"
 grep -qx 'CONFIG_NF_CONNTRACK=y' "$build_dir/.config" || ci_die "netfilter connection tracking was not built into the kernel"
 grep -qx 'CONFIG_NF_DEFRAG_IPV4=y' "$build_dir/.config" || ci_die "IPv4 netfilter defragmentation was not built into the kernel"
-grep -qx 'CONFIG_NF_DEFRAG_IPV6=y' "$build_dir/.config" || ci_die "IPv6 netfilter defragmentation was not built into the kernel"
 grep -qx 'CONFIG_NF_NAT=y' "$build_dir/.config" || ci_die "netfilter NAT was not built into the kernel"
-if grep -qx 'CONFIG_XFRM=y' "$build_dir/.config"; then
-  ci_die "XFRM changes the ABI of struct sock and struct net; rebuild and install all rootfs modules before enabling it"
-fi
-grep -qx '# CONFIG_XFRM_USER is not set' "$build_dir/.config" || ci_die "XFRM_USER must remain disabled while using the bootstrap rootfs modules"
-grep -qx '# CONFIG_NF_CONNTRACK_MARK is not set' "$build_dir/.config" || ci_die "NF_CONNTRACK_MARK changes the nf_conn module ABI and requires rebuilding the rootfs modules"
-grep -qx 'CONFIG_NETFILTER_NETLINK=y' "$build_dir/.config" || ci_die "netfilter netlink support was not built into the kernel"
-grep -qx 'CONFIG_NETFILTER_NETLINK_LOG=y' "$build_dir/.config" || ci_die "netfilter NFLOG interface required by Android netd was not built into the kernel"
-grep -qx 'CONFIG_NF_CT_NETLINK=y' "$build_dir/.config" || ci_die "conntrack netlink support required by Android netd was not built into the kernel"
-grep -qx 'CONFIG_NETFILTER_XT_MARK=y' "$build_dir/.config" || ci_die "iptables mark match and MARK target were not built into the kernel"
+grep -qx 'CONFIG_XFRM=y' "$build_dir/.config" || ci_die "XFRM core support required by Android netd was not enabled"
+grep -qx 'CONFIG_XFRM_ALGO=m' "$build_dir/.config" || ci_die "XFRM algorithms required by Android netd were not configured as modules"
+grep -qx 'CONFIG_XFRM_USER=m' "$build_dir/.config" || ci_die "XFRM netlink support required by Android netd was not configured as a module"
+grep -qx 'CONFIG_NETFILTER_NETLINK=m' "$build_dir/.config" || ci_die "netfilter netlink support was not configured as a module"
+grep -qx 'CONFIG_NETFILTER_NETLINK_LOG=m' "$build_dir/.config" || ci_die "NFLOG netlink support required by Android netd was not configured as a module"
+grep -qx 'CONFIG_NF_CT_NETLINK=m' "$build_dir/.config" || ci_die "conntrack netlink support required by Android netd was not configured as a module"
+grep -qx 'CONFIG_NF_CONNTRACK_MARK=y' "$build_dir/.config" || ci_die "conntrack mark storage required by Android netd was not enabled"
+grep -qx 'CONFIG_NETFILTER_XT_CONNMARK=m' "$build_dir/.config" || ci_die "CONNMARK support required by Android netd was not configured as a module"
+grep -qx 'CONFIG_NETFILTER_XT_MARK=m' "$build_dir/.config" || ci_die "MARK support required by Android netd was not configured as a module"
 grep -qx 'CONFIG_NETFILTER_XT_TARGET_CHECKSUM=y' "$build_dir/.config" || ci_die "iptables CHECKSUM target was not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y' "$build_dir/.config" || ci_die "iptables MASQUERADE target was not built into the kernel"
-grep -qx 'CONFIG_NETFILTER_XT_TARGET_NFLOG=y' "$build_dir/.config" || ci_die "iptables NFLOG target required by Android netd was not built into the kernel"
-grep -qx 'CONFIG_NETFILTER_XT_TARGET_TCPMSS=y' "$build_dir/.config" || ci_die "iptables TCPMSS target required by Android networking was not built into the kernel"
-grep -qx 'CONFIG_NETFILTER_XT_MATCH_BPF=y' "$build_dir/.config" || ci_die "iptables BPF match required by Android netd was not built into the kernel"
-grep -qx 'CONFIG_NETFILTER_XT_MATCH_COMMENT=y' "$build_dir/.config" || ci_die "iptables comment match required by Android networking was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_TARGET_NFLOG=m' "$build_dir/.config" || ci_die "NFLOG target required by Android netd was not configured as a module"
+grep -qx 'CONFIG_NETFILTER_XT_TARGET_TCPMSS=m' "$build_dir/.config" || ci_die "TCPMSS target required by Android netd was not configured as a module"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_BPF=m' "$build_dir/.config" || ci_die "BPF match required by Android netd was not configured as a module"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_COMMENT=m' "$build_dir/.config" || ci_die "comment match required by Android netd was not configured as a module"
 grep -qx 'CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y' "$build_dir/.config" || ci_die "iptables conntrack match was not built into the kernel"
-grep -qx 'CONFIG_NETFILTER_XT_MATCH_LIMIT=y' "$build_dir/.config" || ci_die "iptables limit match required by Android netd was not built into the kernel"
-grep -qx 'CONFIG_NETFILTER_XT_MATCH_OWNER=y' "$build_dir/.config" || ci_die "iptables owner match required by Android netd was not built into the kernel"
-grep -qx 'CONFIG_NETFILTER_XT_MATCH_SOCKET=y' "$build_dir/.config" || ci_die "iptables socket match required by Android networking was not built into the kernel"
-grep -qx 'CONFIG_NETFILTER_XT_MATCH_STATE=y' "$build_dir/.config" || ci_die "iptables state match required by Android networking was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_LIMIT=m' "$build_dir/.config" || ci_die "limit match required by Android netd was not configured as a module"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_OWNER=m' "$build_dir/.config" || ci_die "owner match required by Android netd was not configured as a module"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_POLICY=m' "$build_dir/.config" || ci_die "IPsec policy match required by Android netd was not configured as a module"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_SOCKET=m' "$build_dir/.config" || ci_die "socket match required by Android netd was not configured as a module"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_STATE=m' "$build_dir/.config" || ci_die "state match required by Android netd was not configured as a module"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_U32=m' "$build_dir/.config" || ci_die "u32 match required by Android netd was not configured as a module"
 grep -qx 'CONFIG_IP_NF_IPTABLES=y' "$build_dir/.config" || ci_die "IPv4 iptables was not built into the kernel"
 grep -qx 'CONFIG_IP_NF_FILTER=y' "$build_dir/.config" || ci_die "IPv4 iptables filter table was not built into the kernel"
-grep -qx 'CONFIG_IP_NF_TARGET_REJECT=y' "$build_dir/.config" || ci_die "IPv4 iptables REJECT target was not built into the kernel"
+grep -qx 'CONFIG_IP_NF_TARGET_REJECT=m' "$build_dir/.config" || ci_die "IPv4 REJECT target required by Android netd was not configured as a module"
 grep -qx 'CONFIG_IP_NF_NAT=y' "$build_dir/.config" || ci_die "IPv4 iptables NAT table was not built into the kernel"
 grep -qx 'CONFIG_IP_NF_MANGLE=y' "$build_dir/.config" || ci_die "IPv4 iptables mangle table was not built into the kernel"
-grep -qx 'CONFIG_IP_NF_RAW=y' "$build_dir/.config" || ci_die "IPv4 iptables raw table required by Android netd was not built into the kernel"
-grep -qx 'CONFIG_IP6_NF_IPTABLES_LEGACY=y' "$build_dir/.config" || ci_die "legacy IPv6 iptables support required by Android netd was not built into the kernel"
-grep -qx 'CONFIG_IP6_NF_IPTABLES=y' "$build_dir/.config" || ci_die "IPv6 iptables was not built into the kernel"
-grep -qx 'CONFIG_IP6_NF_FILTER=y' "$build_dir/.config" || ci_die "IPv6 iptables filter table was not built into the kernel"
-grep -qx 'CONFIG_IP6_NF_TARGET_REJECT=y' "$build_dir/.config" || ci_die "IPv6 iptables REJECT target was not built into the kernel"
-grep -qx 'CONFIG_IP6_NF_MANGLE=y' "$build_dir/.config" || ci_die "IPv6 iptables mangle table was not built into the kernel"
-grep -qx 'CONFIG_IP6_NF_RAW=y' "$build_dir/.config" || ci_die "IPv6 iptables raw table required by Android netd was not built into the kernel"
-grep -qx 'CONFIG_IP6_NF_MATCH_RPFILTER=y' "$build_dir/.config" || ci_die "IPv6 reverse-path filter match required by Android networking was not built into the kernel"
+grep -qx 'CONFIG_IP_NF_RAW=m' "$build_dir/.config" || ci_die "IPv4 raw table required by Android netd was not configured as a module"
+grep -qx 'CONFIG_IP6_NF_IPTABLES_LEGACY=m' "$build_dir/.config" || ci_die "legacy IPv6 iptables support was not configured as a module"
+grep -qx 'CONFIG_IP6_NF_IPTABLES=m' "$build_dir/.config" || ci_die "IPv6 iptables support was not configured as a module"
+grep -qx 'CONFIG_IP6_NF_FILTER=m' "$build_dir/.config" || ci_die "IPv6 filter table required by Android netd was not configured as a module"
+grep -qx 'CONFIG_IP6_NF_TARGET_REJECT=m' "$build_dir/.config" || ci_die "IPv6 REJECT target required by Android netd was not configured as a module"
+grep -qx 'CONFIG_IP6_NF_MANGLE=m' "$build_dir/.config" || ci_die "IPv6 mangle table required by Android netd was not configured as a module"
+grep -qx 'CONFIG_IP6_NF_RAW=m' "$build_dir/.config" || ci_die "IPv6 raw table required by Android netd was not configured as a module"
+grep -qx 'CONFIG_IP6_NF_MATCH_RPFILTER=m' "$build_dir/.config" || ci_die "IPv6 rpfilter match required by Android netd was not configured as a module"
 grep -qx 'CONFIG_BRIDGE=y' "$build_dir/.config" || ci_die "Ethernet bridge support was not built into the kernel"
 grep -qx 'CONFIG_BRIDGE_NETFILTER=y' "$build_dir/.config" || ci_die "bridge netfilter support was not built into the kernel"
 grep -qx 'CONFIG_VETH=y' "$build_dir/.config" || ci_die "virtual Ethernet pair support was not built into the kernel"
@@ -275,8 +288,8 @@ grep -qx 'CONFIG_SQUASHFS_ZSTD=y' "$build_dir/.config" || ci_die "SquashFS Zstan
 grep -qx 'CONFIG_SQUASHFS_LZO=y' "$build_dir/.config" || ci_die "SquashFS LZO decompression was not enabled"
 grep -q '^CONFIG_LSM="[^"]*apparmor[^"]*"$' "$build_dir/.config" || ci_die "AppArmor is missing from CONFIG_LSM"
 
-ci_log "building arm64 Image and $DTB_NAME with $KERNEL_BUILD_JOBS jobs"
-make -j"$KERNEL_BUILD_JOBS" "${make_args[@]}" Image "qcom/$DTB_NAME"
+ci_log "building arm64 Image, $DTB_NAME, and matching modules with $KERNEL_BUILD_JOBS jobs"
+make -j"$KERNEL_BUILD_JOBS" "${make_args[@]}" Image "qcom/$DTB_NAME" modules
 
 if [ -n "$KERNEL_CCACHE_DIR" ]; then
   ccache --show-stats || true
@@ -290,11 +303,64 @@ dtb_file="$build_dir/arch/arm64/boot/dts/qcom/$DTB_NAME"
 kernel_release=$(make -s "${make_args[@]}" kernelrelease)
 kernel_describe=$(git -C "$source_dir" describe --always --dirty --tags)
 archive_name="y700-kernel-artifacts-${kernel_release}-snap.tar.gz"
+modules_archive_name="y700-kernel-modules-${kernel_release}.tar.zst"
+
+ci_log "staging matching in-tree modules for $kernel_release"
+make "${make_args[@]}" \
+  INSTALL_MOD_PATH="$modules_stage" \
+  INSTALL_MOD_STRIP=1 \
+  modules_install
+mkdir -p "$modules_stage/usr/lib" "$modules_stage/usr/lib/modules-load.d"
+mv "$modules_stage/lib/modules" "$modules_stage/usr/lib/modules"
+rmdir "$modules_stage/lib"
+rm -f \
+  "$modules_stage/usr/lib/modules/$kernel_release/build" \
+  "$modules_stage/usr/lib/modules/$kernel_release/source"
+
+required_waydroid_modules=(
+  xfrm_user nfnetlink nfnetlink_log nf_conntrack_netlink
+  xt_connmark xt_mark xt_NFLOG xt_TCPMSS xt_bpf xt_comment xt_limit
+  xt_owner xt_policy xt_socket xt_state xt_u32
+  ipt_REJECT iptable_raw
+  ip6_tables ip6table_filter ip6t_REJECT ip6table_mangle ip6table_raw ip6t_rpfilter
+)
+for module_name in "${required_waydroid_modules[@]}"; do
+  find "$modules_stage/usr/lib/modules/$kernel_release" -type f -name "$module_name.ko" -print -quit \
+    | grep -q . || ci_die "required Waydroid module was not installed: $module_name.ko"
+done
+
+cat > "$modules_stage/usr/lib/modules-load.d/y700-waydroid.conf" <<'MODULES'
+xfrm_user
+nfnetlink
+nfnetlink_log
+nf_conntrack_netlink
+xt_connmark
+xt_mark
+xt_NFLOG
+xt_TCPMSS
+xt_bpf
+xt_comment
+xt_limit
+xt_owner
+xt_policy
+xt_socket
+xt_state
+xt_u32
+ipt_REJECT
+iptable_raw
+ip6_tables
+ip6table_filter
+ip6t_REJECT
+ip6table_mangle
+ip6table_raw
+ip6t_rpfilter
+MODULES
 
 mkdir -p "$payload_dir"
 install -m 0644 "$kernel_image" "$payload_dir/Image"
 install -m 0644 "$dtb_file" "$payload_dir/$DTB_NAME"
 install -m 0644 "$build_dir/.config" "$payload_dir/kernel.config"
+tar --zstd -C "$modules_stage" -cf "$payload_dir/$modules_archive_name" usr
 
 cat > "$payload_dir/BUILD-INFO.txt" <<INFO
 generated=$(date -u -Iseconds)
@@ -302,6 +368,7 @@ repository=$KERNEL_SOURCE_REPOSITORY
 requested_ref=$KERNEL_SOURCE_REF
 resolved_ref=$resolved_ref
 describe=$kernel_describe
+kernel_localversion=$KERNEL_LOCALVERSION
 kernel_release=$kernel_release
 cross_compile=$CROSS_COMPILE
 build_jobs=$KERNEL_BUILD_JOBS
@@ -317,9 +384,17 @@ waydroid_config_namespaces=y
 waydroid_config_cgroups=y
 waydroid_config_psi=y
 waydroid_config_netfilter=y
+waydroid_config_xfrm=y
+waydroid_config_xfrm_user=m
+waydroid_config_nf_conntrack_mark=y
+waydroid_config_netfilter_netlink=m
+waydroid_config_netfilter_netlink_log=m
+waydroid_config_nf_ct_netlink=m
 waydroid_config_nf_nat=y
 waydroid_config_iptables=y
 waydroid_config_iptables_legacy=y
+waydroid_netd_extensions=modules
+waydroid_modules_archive=$modules_archive_name
 waydroid_config_bridge=y
 waydroid_config_bridge_netfilter=y
 waydroid_config_veth=y
@@ -331,7 +406,7 @@ snap_config_squashfs_zstd=y
 snap_config_squashfs_lzo=y
 INFO
 
-(cd "$payload_dir" && sha256sum BUILD-INFO.txt Image kernel.config "$DTB_NAME" > SHA256SUMS)
+(cd "$payload_dir" && sha256sum BUILD-INFO.txt Image kernel.config "$DTB_NAME" "$modules_archive_name" > SHA256SUMS)
 rm -f "$OUTPUT_DIR"/y700-kernel-artifacts-*-snap.tar.gz "$OUTPUT_DIR"/SHA256SUMS-y700-kernel-artifacts.txt
 tar -C "$payload_dir" -czf "$OUTPUT_DIR/$archive_name" .
 (cd "$OUTPUT_DIR" && sha256sum "$archive_name" > SHA256SUMS-y700-kernel-artifacts.txt)

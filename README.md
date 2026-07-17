@@ -25,11 +25,12 @@ Leave the advanced override inputs empty for the built-in verified defaults. If 
 
 ## Fast Kernel And GRUB Workflow
 
-Use **Build Kernel And GRUB** in the Actions UI when changing only the kernel configuration or kernel source. This workflow builds `Image` and the TB321FU DTB, injects them into the verified FAT/GRUB template, and uploads an artifact containing:
+Use **Build Kernel And GRUB** in the Actions UI when changing only the kernel configuration or kernel source. This workflow builds `Image`, the TB321FU DTB, and the matching in-tree modules, injects the boot files into the verified FAT/GRUB template, and uploads an artifact containing:
 
 - `grub.img.7z`
+- `y700-kernel-modules-<kernel-release>.tar.zst`
 - `SHA256SUMS.txt`
-- the intermediate kernel artifact archive containing `Image`, DTB, `kernel.config`, and build metadata
+- the intermediate kernel artifact archive containing `Image`, DTB, `kernel.config`, the module archive, and build metadata
 
 It does not run debootstrap, provision a desktop, build device rootfs packages, create an ext4 rootfs image, or compress a rootfs image. The existing rootfs remains selected through `ROOT_PARTLABEL=userdata` by default.
 
@@ -40,11 +41,23 @@ CONFIG_EXAMPLE_FEATURE=y
 # CONFIG_EXAMPLE_DEBUG is not set
 ```
 
-The fragment is merged over the verified base configuration. Required Snap/Waydroid settings are validated after Kconfig normalization, so accidentally disabling one fails the build instead of producing a misleading artifact. Boot-critical storage, filesystem, display, and device drivers must remain built in with `=y`; this direct GRUB path has no initramfs. A feature configured as `=m` also requires its matching module to be installed under `/lib/modules/<kernel-release>` in the existing rootfs.
+The fragment is merged over the verified base configuration. Required Snap/Waydroid settings are validated after Kconfig normalization, so accidentally disabling one fails the build instead of producing a misleading artifact. Boot-critical storage, filesystem, display, and device drivers must remain built in with `=y`; this direct GRUB path has no initramfs. Waydroid's netd-only extensions are deliberately built as modules and the workflow uses `KERNEL_LOCALVERSION=-waydroid`, so the new module directory is installed beside the known-good kernel's modules instead of overwriting them.
+
+For a kernel-only update, install the matching module archive into the existing Ubuntu rootfs **before** replacing or flashing `grub.img.7z`:
+
+```bash
+modules_archive=y700-kernel-modules-<kernel-release>.tar.zst
+kernel_release=$(tar --zstd -tf "$modules_archive" | sed -n 's#^usr/lib/modules/\([^/]*\)/.*#\1#p' | head -n1)
+test -n "$kernel_release"
+sudo tar --zstd -xf "$modules_archive" -C /
+sudo depmod "$kernel_release"
+```
+
+The archive also installs `/usr/lib/modules-load.d/y700-waydroid.conf`, so the required netfilter and XFRM modules load automatically on the next boot. Only after those commands succeed should `grub.img.7z` be installed. Restoring the previous GRUB image rolls back to the known-good kernel without disturbing its old module directory. Out-of-tree camera, haptics, or other device modules must be rebuilt for the new kernel release if they are needed; they are not included in this in-tree module archive.
 
 The kernel-only workflow uses two cache levels. An exact source/config match restores the completed kernel archive; a changed fragment restores the closest `ccache` state and recompiles only what cannot be reused. The final Actions artifact is uploaded without another compression pass because `grub.img.7z` is already compressed.
 
-When `release_tag` is set, the kernel-only workflow creates the Release if needed or replaces only `grub.img.7z` plus its entry in `SHA256SUMS.txt`. It never deletes existing `boot.img.7z` or rootfs assets.
+When `release_tag` is set, the kernel-only workflow creates the Release if needed or replaces `grub.img.7z`, the matching Waydroid module archive, and their entries in `SHA256SUMS.txt`. It never deletes existing `boot.img.7z` or rootfs assets.
 
 ## Rootfs Config
 
@@ -122,9 +135,11 @@ Optional override example:
 BUILD_Y700_KERNEL=1
 KERNEL_SOURCE_REPOSITORY=https://github.com/GUF296/linux.git
 KERNEL_SOURCE_REF=5df8e852ea722929f5359a5ef28ebcec0c4443fd
+KERNEL_LOCALVERSION=-waydroid
 KERNEL_BUILD_JOBS=4
 KERNEL_BASE_CONFIG_ARCHIVE=
 KERNEL_CONFIG_FRAGMENT=configs/y700-kernel.config.fragment
+KERNEL_MODULES_ARCHIVE=
 KERNEL_ARTIFACT_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-kernel-artifacts-7.1.1-g5df8e852ea72.tar.gz
 BOOTAA64_EFI_URL=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/BOOTAA64.EFI
 QCOMRAMP_EFI_URL=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/QCOMRAMP-CONFIGFILE.EFI
@@ -148,7 +163,7 @@ The rootfs builder does not hardcode one historical verified Y700 state. Use `OV
 
 ## Release Assets
 
-When `release_tag` is set, the release intentionally uploads only the user-facing boot/rootfs artifacts:
+When `release_tag` is set, the full rootfs workflow uploads these user-facing boot/rootfs artifacts:
 
 - `boot.img.7z`
 - `grub.img.7z`
@@ -157,13 +172,15 @@ When `release_tag` is set, the release intentionally uploads only the user-facin
 
 The release notes include the rootfs, boot and source config used for that build. Password-like values are redacted from the notes. Release uploads require single-file archives; leave `CHUNK_SIZE` and `BOOT_CHUNK_SIZE` empty when creating a release. The UEFI `boot.img.7z` asset is committed under `source/boot-image/` so release builds do not depend on a previous release to supply it.
 
+The full rootfs workflow installs its freshly built matching modules into `rootfs.img` automatically. The kernel-only workflow instead uploads the module archive as a separate Release asset because it reuses the rootfs already on the device.
+
 New releases created by the workflow are normal GitHub Releases, not prereleases.
 
 ## GNOME, Snap, And Waydroid
 
 The default rootfs uses the Ubuntu GNOME session with GDM and enables Snap support through `snapd`, AppArmor, GNOME Software, and the GNOME Software Snap plugin. Snap applications are installed after the device boots; the rootfs builder does not attempt to run the Snap daemon inside the provisioning chroot.
 
-The bootstrap kernel artifact supplies the verified TB321FU base configuration. By default, the workflow fetches the exact matching public source commit from `GUF296/linux`, enables `CONFIG_SECURITY_APPARMOR=y`, the required SquashFS decompressors, Android Binder IPC and BinderFS, memfd, namespaces, cgroups, PSI, bridge/veth networking, and the built-in legacy IPv4/IPv6 iptables features that do not change the ABI of the modules already installed in the rootfs. This includes raw/filter/mangle tables plus NFLOG, mark, BPF, owner, socket, state, limit, reject, and TCPMSS support. `CONFIG_XFRM_USER`, the policy match, and connmark remain disabled because enabling them also enables `CONFIG_XFRM` or `CONFIG_NF_CONNTRACK_MARK`, changing `struct sock`, `struct net`, or `struct nf_conn` while the bootstrap module package has the same kernel release and no `CONFIG_MODVERSIONS` protection. Those features require rebuilding and installing the complete module set from the same normalized configuration. The workflow then rebuilds `Image` plus the TB321FU DTB. GRUB is packaged with this rebuilt kernel instead of the bootstrap binary. The kernel archive, normalized configuration, build metadata, and checksums are included in the Actions artifact.
+The bootstrap kernel artifact supplies the verified TB321FU base configuration. By default, the workflow fetches the exact matching public source commit from `GUF296/linux`, enables `CONFIG_SECURITY_APPARMOR=y`, the required SquashFS decompressors, Android Binder IPC and BinderFS, memfd, namespaces, cgroups, PSI, bridge/veth networking, and the legacy iptables capabilities required by Android netd. Boot-critical IPv4 filter/NAT/mangle support remains built in. The unavoidable XFRM and conntrack-mark cores are built in, while XFRM userspace control, netfilter netlink/NFLOG, MARK/CONNMARK, TCPMSS, BPF, owner, socket, state, u32, policy, reject, raw, and IPv6 legacy tables are matching modules. The dedicated `-waydroid` kernel release keeps this complete in-tree module set separate from the known-good bootstrap modules. GRUB is packaged with the rebuilt `Image` and DTB; the full rootfs workflow installs the modules automatically, while the kernel-only workflow exposes them as a separate archive.
 
 Set `BUILD_Y700_KERNEL=0` in `source_config` only when intentionally supplying a replacement `KERNEL_ARTIFACT_ARCHIVE` that already has the required Snap and Waydroid kernel features.
 

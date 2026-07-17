@@ -57,6 +57,7 @@ Environment inputs:
   HAPTICS_DEB_ARCHIVE        optional local path or URL containing haptics .deb files
   HAPTICS_DEB_DIR            optional directory containing source-built haptics .deb files
   CAMERA_STACK_DEB_DIR       optional directory containing source-built camera stack .deb files
+  KERNEL_MODULES_ARCHIVE     optional matching kernel modules .tar.zst extracted into rootfs
   BUILD_TB321FU_GPU_SENSOR   build/install TB321FU KSystemStats Adreno frequency plugin, default: 0
   TB321FU_GPU_SENSOR_SOURCE_DIR
                               optional source directory for the plugin; defaults to repo source/
@@ -93,6 +94,7 @@ ci_require_cmd e2fsck
 ci_require_cmd rsync
 ci_require_cmd sha256sum
 ci_require_cmd strings
+ci_require_cmd depmod
 
 DISTRO=${DISTRO:-resolute}
 ARCH=${ARCH:-arm64}
@@ -1228,6 +1230,23 @@ if [ -n "${OVERLAY_DIR:-}" ]; then
   ci_log "applying overlay directory: $OVERLAY_DIR"
   rsync -aH --numeric-ids "$OVERLAY_DIR"/ "$rootfs_dir"/
 fi
+if [ -n "${KERNEL_MODULES_ARCHIVE:-}" ]; then
+  kernel_modules_archive="$work_dir/kernel-modules.tar.zst"
+  kernel_modules_extract="$work_dir/kernel-modules"
+  ci_log "installing matching kernel modules: $KERNEL_MODULES_ARCHIVE"
+  ci_download "$KERNEL_MODULES_ARCHIVE" "$kernel_modules_archive"
+  ci_extract_archive "$kernel_modules_archive" "$kernel_modules_extract"
+  [ -d "$kernel_modules_extract/usr/lib/modules" ] || \
+    ci_die "kernel modules archive does not contain usr/lib/modules"
+  [ -f "$kernel_modules_extract/usr/lib/modules-load.d/y700-waydroid.conf" ] || \
+    ci_die "kernel modules archive does not contain the Waydroid modules-load configuration"
+  mapfile -d '' kernel_module_dirs < <(find "$kernel_modules_extract/usr/lib/modules" -mindepth 1 -maxdepth 1 -type d -print0)
+  [ "${#kernel_module_dirs[@]}" -eq 1 ] || \
+    ci_die "kernel modules archive must contain exactly one kernel release"
+  rsync -aH --numeric-ids "$kernel_modules_extract"/ "$rootfs_dir"/
+  kernel_modules_release=$(basename "${kernel_module_dirs[0]}")
+  depmod -b "$rootfs_dir" "$kernel_modules_release"
+fi
 
 apply_desktop_manager_config "$rootfs_dir"
 apply_tb321fu_legacy_cleanup "$rootfs_dir"
@@ -1273,6 +1292,8 @@ sensor_deb_dir=${SENSOR_DEB_DIR:-}
 haptics_deb_archive=${HAPTICS_DEB_ARCHIVE:-}
 haptics_deb_dir=${HAPTICS_DEB_DIR:-}
 camera_stack_deb_dir=${CAMERA_STACK_DEB_DIR:-}
+kernel_modules_archive=${KERNEL_MODULES_ARCHIVE:-}
+kernel_modules_release=${kernel_modules_release:-}
 build_tb321fu_gpu_sensor=$BUILD_TB321FU_GPU_SENSOR
 tb321fu_gpu_sensor_source_dir=${TB321FU_GPU_SENSOR_SOURCE_DIR:-repo-default}
 install_gnome_snapshot=$INSTALL_GNOME_SNAPSHOT

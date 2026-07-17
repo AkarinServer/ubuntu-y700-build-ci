@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 可选 Release 标签；留空只上传 Actions artifact。已有 Release 只替换 grub.img.7z 和对应校验值。
+        description: 可选 Release 标签；留空只上传 Actions artifact。已有 Release 只替换 grub.img.7z、匹配模块包和对应校验值。
         required: false
         default: ""
         type: string
@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           source scripts/ci/common.sh
           packages=(
-            bc bison flex make git curl ca-certificates tar unzip xz-utils zstd p7zip-full
+            bc bison flex make git curl ca-certificates tar unzip xz-utils zstd p7zip-full kmod
             gcc-aarch64-linux-gnu libssl-dev libelf-dev dwarves device-tree-compiler ccache
             dosfstools mtools
           )
@@ -85,6 +85,7 @@ jobs:
           esac
           cat > "$RUNNER_TEMP/kernel-source.env" <<'CONFIG_EOF'
           KERNEL_SOURCE_REPOSITORY=https://github.com/GUF296/linux.git
+          KERNEL_LOCALVERSION=-waydroid
           KERNEL_BASE_CONFIG_ARCHIVE=
           KERNEL_ARTIFACT_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-kernel-artifacts-7.1.1-g5df8e852ea72.tar.gz
           KERNEL_CCACHE_MAXSIZE=4G
@@ -168,7 +169,7 @@ jobs:
           base_identity=$(printf '%s\0' \
             "$KERNEL_SOURCE_REPOSITORY" "$KERNEL_SOURCE_REF" \
             "$base_config_identity" \
-            "$DTB_NAME" "$compiler_version" \
+            "$DTB_NAME" "$KERNEL_LOCALVERSION" "$compiler_version" \
             | sha256sum | cut -d' ' -f1)
           build_identity=$(printf '%s\0' \
             "$fragment_hash" "$KERNEL_BUILD_JOBS" "$ref_cache_nonce" \
@@ -198,7 +199,7 @@ jobs:
             y700-kernel-ccache-${{ runner.arch }}-${{ steps.cache-meta.outputs.base }}-${{ steps.cache-meta.outputs.build }}-
             y700-kernel-ccache-${{ runner.arch }}-${{ steps.cache-meta.outputs.base }}-
 
-      - name: Build kernel Image and DTB
+      - name: Build kernel Image, DTB, and matching modules
         id: build-kernel
         if: steps.kernel-artifact-cache.outputs.cache-hit != 'true'
         run: |
@@ -207,6 +208,7 @@ jobs:
             OUTPUT_DIR="$OUTPUT_DIR_KERNEL" \
             KERNEL_SOURCE_REPOSITORY="$KERNEL_SOURCE_REPOSITORY" \
             KERNEL_SOURCE_REF="$KERNEL_SOURCE_REF" \
+            KERNEL_LOCALVERSION="$KERNEL_LOCALVERSION" \
             KERNEL_BUILD_JOBS="$KERNEL_BUILD_JOBS" \
             KERNEL_BASE_CONFIG_ARCHIVE="${KERNEL_BASE_CONFIG_ARCHIVE:-$KERNEL_ARTIFACT_ARCHIVE}" \
             KERNEL_CONFIG_FRAGMENT="${KERNEL_CONFIG_FRAGMENT:-}" \
@@ -236,7 +238,14 @@ jobs:
           set -euo pipefail
           kernel_archive=$(find "$OUTPUT_DIR_KERNEL" -maxdepth 1 -type f -name 'y700-kernel-artifacts-*-snap.tar.gz' -print -quit)
           [ -n "$kernel_archive" ]
+          kernel_payload="$RUNNER_TEMP/y700-kernel-payload"
+          rm -rf "$kernel_payload"
+          mkdir -p "$kernel_payload"
+          tar -C "$kernel_payload" -xzf "$kernel_archive"
+          modules_archive=$(find "$kernel_payload" -maxdepth 1 -type f -name 'y700-kernel-modules-*.tar.zst' -print -quit)
+          [ -n "$modules_archive" ]
           echo "Y700_KERNEL_ARTIFACT_ARCHIVE=$kernel_archive" >> "$GITHUB_ENV"
+          echo "Y700_KERNEL_MODULES_ARCHIVE=$modules_archive" >> "$GITHUB_ENV"
 
       - name: Build GRUB boot image
         run: |
@@ -263,18 +272,20 @@ jobs:
             KEEP_BOOT_IMAGE="$KEEP_BOOT_IMAGE" \
             bash scripts/ci/build-grub-image.sh
 
-      - name: Stage grub.img.7z
+      - name: Stage GRUB and matching modules
         run: |
           set -euo pipefail
           source_archive="$OUTPUT_DIR_GRUB/${OUTPUT_PREFIX}-grub-fat.img.7z"
           [ -f "$source_archive" ]
           mkdir -p "$OUTPUT_DIR_RELEASE"
           install -m 0644 "$source_archive" "$OUTPUT_DIR_RELEASE/grub.img.7z"
+          install -m 0644 "$Y700_KERNEL_MODULES_ARCHIVE" "$OUTPUT_DIR_RELEASE/"
           install -m 0644 "$Y700_KERNEL_ARTIFACT_ARCHIVE" "$OUTPUT_DIR_RELEASE/"
           install -m 0644 \
             "$OUTPUT_DIR_KERNEL/SHA256SUMS-y700-kernel-artifacts.txt" \
             "$OUTPUT_DIR_RELEASE/"
-          (cd "$OUTPUT_DIR_RELEASE" && sha256sum grub.img.7z > SHA256SUMS.txt)
+          modules_asset=$(basename "$Y700_KERNEL_MODULES_ARCHIVE")
+          (cd "$OUTPUT_DIR_RELEASE" && sha256sum grub.img.7z "$modules_asset" > SHA256SUMS.txt)
 
       - name: Upload kernel and GRUB artifact
         uses: actions/upload-artifact@v7
@@ -296,10 +307,11 @@ jobs:
           # Kernel + GRUB build
 
           - Kernel ref: \`$KERNEL_SOURCE_REF\`
+          - Kernel local version: \`$KERNEL_LOCALVERSION\`
           - Config fragment: \`${KERNEL_CONFIG_FRAGMENT:-none}\`
           - Workflow run: \`$GITHUB_RUN_ID\`
 
-          This kernel-only build replaces only \`grub.img.7z\` and preserves any existing rootfs and boot assets.
+          This kernel-only build replaces \`grub.img.7z\` and its matching Waydroid module archive, while preserving existing rootfs and boot assets.
           NOTES
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file "$notes"
@@ -313,13 +325,20 @@ jobs:
             gh release download "$RELEASE_TAG" \
               --pattern SHA256SUMS.txt \
               --dir "$old_checksums"
-            awk '$2 != "grub.img.7z" && $2 != "./grub.img.7z" && $2 != "*grub.img.7z"' \
+            awk '$2 != "grub.img.7z" && $2 != "./grub.img.7z" && $2 != "*grub.img.7z" && $2 !~ /(^|\/)y700-kernel-modules-.*\.tar\.zst$/' \
               "$old_checksums/SHA256SUMS.txt" > "$OUTPUT_DIR_RELEASE/SHA256SUMS.txt"
           else
             : > "$OUTPUT_DIR_RELEASE/SHA256SUMS.txt"
           fi
-          (cd "$OUTPUT_DIR_RELEASE" && sha256sum grub.img.7z >> SHA256SUMS.txt)
+          while IFS= read -r stale_module_asset; do
+            [ -n "$stale_module_asset" ] || continue
+            gh release delete-asset "$RELEASE_TAG" "$stale_module_asset" -y
+          done < <(gh release view "$RELEASE_TAG" --json assets \
+            --jq '.assets[].name | select(startswith("y700-kernel-modules-") and endswith(".tar.zst"))')
+          modules_asset=$(basename "$Y700_KERNEL_MODULES_ARCHIVE")
+          (cd "$OUTPUT_DIR_RELEASE" && sha256sum grub.img.7z "$modules_asset" >> SHA256SUMS.txt)
           gh release upload "$RELEASE_TAG" \
             "$OUTPUT_DIR_RELEASE/grub.img.7z" \
+            "$Y700_KERNEL_MODULES_ARCHIVE" \
             "$OUTPUT_DIR_RELEASE/SHA256SUMS.txt" \
             --clobber

@@ -147,7 +147,7 @@ jobs:
           Acquire::https::Timeout "30";
           APT_CONFIG
           packages=(
-            debootstrap dosfstools mtools e2fsprogs rsync curl unzip tar xz-utils zstd p7zip-full \
+            debootstrap dosfstools mtools e2fsprogs rsync curl unzip tar xz-utils zstd p7zip-full kmod \
             gdisk qemu-utils sudo ca-certificates gnupg binutils git make bc bison flex \
             libssl-dev libelf-dev dwarves device-tree-compiler \
             meson ninja-build pkg-config protobuf-c-compiler gcc-aarch64-linux-gnu \
@@ -258,9 +258,11 @@ jobs:
           BUILD_Y700_KERNEL=1
           KERNEL_SOURCE_REPOSITORY=https://github.com/GUF296/linux.git
           KERNEL_SOURCE_REF=5df8e852ea722929f5359a5ef28ebcec0c4443fd
+          KERNEL_LOCALVERSION=-waydroid
           KERNEL_BUILD_JOBS=4
           KERNEL_BASE_CONFIG_ARCHIVE=
           KERNEL_CONFIG_FRAGMENT=configs/y700-kernel.config.fragment
+          KERNEL_MODULES_ARCHIVE=
           KERNEL_ARTIFACT_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-kernel-artifacts-7.1.1-g5df8e852ea72.tar.gz
           BOOTAA64_EFI_URL=
           QCOMRAMP_EFI_URL=
@@ -338,6 +340,7 @@ jobs:
           kernel_identity=$(printf '%s\0' \
             "$KERNEL_SOURCE_REPOSITORY" "$KERNEL_SOURCE_REF" \
             "${KERNEL_BASE_CONFIG_ARCHIVE:-$KERNEL_ARTIFACT_ARCHIVE}" "$DTB_NAME" \
+            "$KERNEL_LOCALVERSION" \
             "${KERNEL_CONFIG_FRAGMENT:-}" "$kernel_config_fragment_identity" \
             | sha256sum | cut -d' ' -f1)
           echo "rootfs=$rootfs_identity" >> "$GITHUB_OUTPUT"
@@ -433,6 +436,7 @@ jobs:
             OUTPUT_DIR=out/y700-kernel-artifacts \
             KERNEL_SOURCE_REPOSITORY="$KERNEL_SOURCE_REPOSITORY" \
             KERNEL_SOURCE_REF="$KERNEL_SOURCE_REF" \
+            KERNEL_LOCALVERSION="$KERNEL_LOCALVERSION" \
             KERNEL_BUILD_JOBS="$KERNEL_BUILD_JOBS" \
             KERNEL_BASE_CONFIG_ARCHIVE="${KERNEL_BASE_CONFIG_ARCHIVE:-$KERNEL_ARTIFACT_ARCHIVE}" \
             KERNEL_CONFIG_FRAGMENT="${KERNEL_CONFIG_FRAGMENT:-}" \
@@ -457,7 +461,16 @@ jobs:
           fi
           kernel_archive=$(find out/y700-kernel-artifacts -maxdepth 1 -type f -name 'y700-kernel-artifacts-*-snap.tar.gz' -print -quit)
           test -n "$kernel_archive"
+          kernel_payload="$RUNNER_TEMP/y700-kernel-payload"
+          rm -rf "$kernel_payload"
+          mkdir -p "$kernel_payload"
+          tar -C "$kernel_payload" -xzf "$kernel_archive"
+          modules_archive=$(find "$kernel_payload" -maxdepth 1 -type f -name 'y700-kernel-modules-*.tar.zst' -print -quit)
+          test -n "$modules_archive"
+          installed_modules_archive="out/y700-kernel-artifacts/$(basename "$modules_archive")"
+          install -m 0644 "$modules_archive" "$installed_modules_archive"
           echo "Y700_KERNEL_ARTIFACT_ARCHIVE=$kernel_archive" >> "$GITHUB_ENV"
+          echo "Y700_KERNEL_MODULES_ARCHIVE=$installed_modules_archive" >> "$GITHUB_ENV"
 
       - name: Build source haptics deb
         run: |
@@ -527,8 +540,8 @@ jobs:
         id: build-rootfs
         run: |
           set -euo pipefail
-          sudo --preserve-env=OUTPUT_PREFIX,DISTRO,ARCH,MIRROR,DEBOOTSTRAP_VARIANT,DEBOOTSTRAP_CACHE_DIR,DEBOOTSTRAP_RETRIES,RESOLV_CONF_CONTENT,APT_HTTP_PROXY,APT_HTTPS_PROXY,APT_FORCE_IPV4,APT_RETRIES,APT_TIMEOUT_SECONDS,ROOTFS_APT_CACHE_DIR,http_proxy,https_proxy,HTTP_PROXY,HTTPS_PROXY,APT_SOURCES_LIST,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,DESKTOP_FLAVOR,DISPLAY_MANAGER,DESKTOP_AUTOLOGIN,DESKTOP_SESSION,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,DEB_ARCHIVE,DEB_DIR,SENSOR_DEB_ARCHIVE,SENSOR_DEB_DIR,HAPTICS_DEB_ARCHIVE,HAPTICS_DEB_DIR,CAMERA_STACK_DEB_DIR,BUILD_TB321FU_GPU_SENSOR,TB321FU_GPU_SENSOR_SOURCE_DIR,TB321FU_GPU_SENSOR_BUILD_JOBS,INSTALL_GNOME_SNAPSHOT,INSTALL_FIREFOX,INSTALL_IBUS_CHINESE,IBUS_CHINESE_PACKAGES,DISABLE_SNAPD,REBUILD_TB321FU_CAMERA_GNOME_PLUGIN,CAMERA_PIPEWIRE_VERSION,CAMERA_PIPEWIRE_SOURCE_URL,APPLY_Y700_FIRMWARE_FIXES,APPLY_Y700_AUDIO_POLICY_FIXES,CLEAN_APT_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
-            env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" SENSOR_DEB_DIR="${Y700_SENSOR_DEB_DIR:-${SENSOR_DEB_DIR:-}}" HAPTICS_DEB_DIR="${TB321FU_HAPTICS_DEB_DIR:-${HAPTICS_DEB_DIR:-}}" CAMERA_STACK_DEB_DIR="${TB321FU_CAMERA_STACK_DEB_DIR:-}" bash scripts/ci/build-rootfs-image.sh
+          sudo --preserve-env=OUTPUT_PREFIX,DISTRO,ARCH,MIRROR,DEBOOTSTRAP_VARIANT,DEBOOTSTRAP_CACHE_DIR,DEBOOTSTRAP_RETRIES,RESOLV_CONF_CONTENT,APT_HTTP_PROXY,APT_HTTPS_PROXY,APT_FORCE_IPV4,APT_RETRIES,APT_TIMEOUT_SECONDS,ROOTFS_APT_CACHE_DIR,http_proxy,https_proxy,HTTP_PROXY,HTTPS_PROXY,APT_SOURCES_LIST,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,DESKTOP_FLAVOR,DISPLAY_MANAGER,DESKTOP_AUTOLOGIN,DESKTOP_SESSION,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,DEB_ARCHIVE,DEB_DIR,SENSOR_DEB_ARCHIVE,SENSOR_DEB_DIR,HAPTICS_DEB_ARCHIVE,HAPTICS_DEB_DIR,CAMERA_STACK_DEB_DIR,KERNEL_MODULES_ARCHIVE,BUILD_TB321FU_GPU_SENSOR,TB321FU_GPU_SENSOR_SOURCE_DIR,TB321FU_GPU_SENSOR_BUILD_JOBS,INSTALL_GNOME_SNAPSHOT,INSTALL_FIREFOX,INSTALL_IBUS_CHINESE,IBUS_CHINESE_PACKAGES,DISABLE_SNAPD,REBUILD_TB321FU_CAMERA_GNOME_PLUGIN,CAMERA_PIPEWIRE_VERSION,CAMERA_PIPEWIRE_SOURCE_URL,APPLY_Y700_FIRMWARE_FIXES,APPLY_Y700_AUDIO_POLICY_FIXES,CLEAN_APT_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
+            env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" SENSOR_DEB_DIR="${Y700_SENSOR_DEB_DIR:-${SENSOR_DEB_DIR:-}}" HAPTICS_DEB_DIR="${TB321FU_HAPTICS_DEB_DIR:-${HAPTICS_DEB_DIR:-}}" CAMERA_STACK_DEB_DIR="${TB321FU_CAMERA_STACK_DEB_DIR:-}" KERNEL_MODULES_ARCHIVE="${Y700_KERNEL_MODULES_ARCHIVE:-${KERNEL_MODULES_ARCHIVE:-}}" bash scripts/ci/build-rootfs-image.sh
           sudo chown -R "$USER:$USER" out
 
       - name: Save rootfs package cache
