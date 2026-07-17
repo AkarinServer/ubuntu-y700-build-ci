@@ -22,7 +22,7 @@ Environment inputs:
 
 The base configuration is preserved except for enabling the AppArmor and
 SquashFS features required by Snap, plus Binder, BinderFS, memfd, namespaces,
-cgroups, and PSI for Waydroid containers.
+cgroups, PSI, bridge/veth networking, and legacy iptables NAT for Waydroid containers.
 USAGE
 }
 
@@ -107,6 +107,23 @@ esac
   --enable NET_NS \
   --enable CGROUPS \
   --enable PSI \
+  --enable NETFILTER \
+  --enable NETFILTER_ADVANCED \
+  --enable NETFILTER_XTABLES \
+  --enable NETFILTER_XTABLES_LEGACY \
+  --enable NF_CONNTRACK \
+  --enable NF_DEFRAG_IPV4 \
+  --enable NF_NAT \
+  --enable NETFILTER_XT_TARGET_CHECKSUM \
+  --enable NETFILTER_XT_TARGET_MASQUERADE \
+  --enable NETFILTER_XT_MATCH_CONNTRACK \
+  --enable IP_NF_IPTABLES \
+  --enable IP_NF_FILTER \
+  --enable IP_NF_NAT \
+  --enable IP_NF_MANGLE \
+  --enable BRIDGE \
+  --enable BRIDGE_NETFILTER \
+  --enable VETH \
   --enable SECURITY_APPARMOR \
   --enable SQUASHFS \
   --enable SQUASHFS_XATTR \
@@ -143,6 +160,23 @@ grep -qx 'CONFIG_PID_NS=y' "$build_dir/.config" || ci_die "PID namespace support
 grep -qx 'CONFIG_NET_NS=y' "$build_dir/.config" || ci_die "network namespace support was not enabled"
 grep -qx 'CONFIG_CGROUPS=y' "$build_dir/.config" || ci_die "cgroup support was not enabled"
 grep -qx 'CONFIG_PSI=y' "$build_dir/.config" || ci_die "pressure stall information was not enabled"
+grep -qx 'CONFIG_NETFILTER=y' "$build_dir/.config" || ci_die "netfilter support was not enabled"
+grep -qx 'CONFIG_NETFILTER_ADVANCED=y' "$build_dir/.config" || ci_die "advanced netfilter support was not enabled"
+grep -qx 'CONFIG_NETFILTER_XTABLES=y' "$build_dir/.config" || ci_die "x_tables support was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XTABLES_LEGACY=y' "$build_dir/.config" || ci_die "legacy x_tables support required by Waydroid was not built into the kernel"
+grep -qx 'CONFIG_NF_CONNTRACK=y' "$build_dir/.config" || ci_die "netfilter connection tracking was not built into the kernel"
+grep -qx 'CONFIG_NF_DEFRAG_IPV4=y' "$build_dir/.config" || ci_die "IPv4 netfilter defragmentation was not built into the kernel"
+grep -qx 'CONFIG_NF_NAT=y' "$build_dir/.config" || ci_die "netfilter NAT was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_TARGET_CHECKSUM=y' "$build_dir/.config" || ci_die "iptables CHECKSUM target was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y' "$build_dir/.config" || ci_die "iptables MASQUERADE target was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y' "$build_dir/.config" || ci_die "iptables conntrack match was not built into the kernel"
+grep -qx 'CONFIG_IP_NF_IPTABLES=y' "$build_dir/.config" || ci_die "IPv4 iptables was not built into the kernel"
+grep -qx 'CONFIG_IP_NF_FILTER=y' "$build_dir/.config" || ci_die "IPv4 iptables filter table was not built into the kernel"
+grep -qx 'CONFIG_IP_NF_NAT=y' "$build_dir/.config" || ci_die "IPv4 iptables NAT table was not built into the kernel"
+grep -qx 'CONFIG_IP_NF_MANGLE=y' "$build_dir/.config" || ci_die "IPv4 iptables mangle table was not built into the kernel"
+grep -qx 'CONFIG_BRIDGE=y' "$build_dir/.config" || ci_die "Ethernet bridge support was not built into the kernel"
+grep -qx 'CONFIG_BRIDGE_NETFILTER=y' "$build_dir/.config" || ci_die "bridge netfilter support was not built into the kernel"
+grep -qx 'CONFIG_VETH=y' "$build_dir/.config" || ci_die "virtual Ethernet pair support was not built into the kernel"
 grep -qx 'CONFIG_SECURITY_APPARMOR=y' "$build_dir/.config" || ci_die "AppArmor was not enabled by Kconfig"
 grep -qx 'CONFIG_SECURITY_NETWORK=y' "$build_dir/.config" || ci_die "AppArmor networking hooks were not enabled"
 grep -qx 'CONFIG_SECURITY_PATH=y' "$build_dir/.config" || ci_die "AppArmor path hooks were not enabled"
@@ -186,6 +220,13 @@ waydroid_config_memfd_create=y
 waydroid_config_namespaces=y
 waydroid_config_cgroups=y
 waydroid_config_psi=y
+waydroid_config_netfilter=y
+waydroid_config_nf_nat=y
+waydroid_config_iptables=y
+waydroid_config_iptables_legacy=y
+waydroid_config_bridge=y
+waydroid_config_bridge_netfilter=y
+waydroid_config_veth=y
 snap_config_security_apparmor=y
 snap_config_lsm=$lsm_list
 snap_config_squashfs_xattr=y
