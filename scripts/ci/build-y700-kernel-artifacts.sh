@@ -347,7 +347,7 @@ rm -f \
   "$modules_stage/usr/lib/modules/$kernel_release/source"
 
 required_waydroid_modules=(
-  xfrm_user nfnetlink nfnetlink_log nf_conntrack_netlink
+  xfrm_user nfnetlink_log nf_conntrack_netlink
   xt_connmark xt_mark xt_NFLOG xt_TCPMSS xt_bpf xt_comment xt_limit
   xt_owner xt_policy xt_socket xt_state xt_u32
   ipt_REJECT iptable_raw
@@ -360,7 +360,6 @@ done
 
 cat > "$modules_stage/usr/lib/modules-load.d/y700-waydroid.conf" <<'MODULES'
 xfrm_user
-nfnetlink
 nfnetlink_log
 nf_conntrack_netlink
 xt_connmark
@@ -416,7 +415,7 @@ waydroid_config_netfilter=y
 waydroid_config_xfrm=y
 waydroid_config_xfrm_user=m
 waydroid_config_nf_conntrack_mark=y
-waydroid_config_netfilter_netlink=m
+waydroid_config_netfilter_netlink=y
 waydroid_config_netfilter_netlink_log=m
 waydroid_config_nf_ct_netlink=m
 waydroid_config_nf_nat=y
