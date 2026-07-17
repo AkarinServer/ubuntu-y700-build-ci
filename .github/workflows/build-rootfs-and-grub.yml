@@ -260,6 +260,7 @@ jobs:
           KERNEL_SOURCE_REF=5df8e852ea722929f5359a5ef28ebcec0c4443fd
           KERNEL_BUILD_JOBS=4
           KERNEL_BASE_CONFIG_ARCHIVE=
+          KERNEL_CONFIG_FRAGMENT=configs/y700-kernel.config.fragment
           KERNEL_ARTIFACT_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-kernel-artifacts-7.1.1-g5df8e852ea72.tar.gz
           BOOTAA64_EFI_URL=
           QCOMRAMP_EFI_URL=
@@ -326,12 +327,18 @@ jobs:
         id: build-cache-meta
         run: |
           set -euo pipefail
+          kernel_config_fragment_identity=none
+          if [ -n "${KERNEL_CONFIG_FRAGMENT:-}" ]; then
+            test -f "$KERNEL_CONFIG_FRAGMENT"
+            kernel_config_fragment_identity=$(sha256sum "$KERNEL_CONFIG_FRAGMENT" | cut -d' ' -f1)
+          fi
           rootfs_identity=$(printf '%s\0' \
             "$DISTRO" "$ARCH" "$MIRROR" "$DEBOOTSTRAP_VARIANT" \
             | sha256sum | cut -d' ' -f1)
           kernel_identity=$(printf '%s\0' \
             "$KERNEL_SOURCE_REPOSITORY" "$KERNEL_SOURCE_REF" \
             "${KERNEL_BASE_CONFIG_ARCHIVE:-$KERNEL_ARTIFACT_ARCHIVE}" "$DTB_NAME" \
+            "${KERNEL_CONFIG_FRAGMENT:-}" "$kernel_config_fragment_identity" \
             | sha256sum | cut -d' ' -f1)
           echo "rootfs=$rootfs_identity" >> "$GITHUB_OUTPUT"
           echo "kernel=$kernel_identity" >> "$GITHUB_OUTPUT"
@@ -416,7 +423,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: out/y700-kernel-artifacts
-          key: y700-kernel-${{ runner.arch }}-${{ steps.build-cache-meta.outputs.kernel }}-${{ hashFiles('scripts/ci/build-y700-kernel-artifacts.sh', '.github/workflows/build-rootfs-and-grub.yml') }}
+          key: y700-kernel-${{ runner.arch }}-${{ steps.build-cache-meta.outputs.kernel }}-${{ hashFiles('scripts/ci/build-y700-kernel-artifacts.sh', 'configs/y700-kernel.config.fragment', '.github/workflows/build-rootfs-and-grub.yml') }}
 
       - name: Build Snap/Waydroid-capable kernel artifacts
         if: env.BUILD_Y700_KERNEL == '1' && steps.kernel-artifact-cache.outputs.cache-hit != 'true'
@@ -428,6 +435,7 @@ jobs:
             KERNEL_SOURCE_REF="$KERNEL_SOURCE_REF" \
             KERNEL_BUILD_JOBS="$KERNEL_BUILD_JOBS" \
             KERNEL_BASE_CONFIG_ARCHIVE="${KERNEL_BASE_CONFIG_ARCHIVE:-$KERNEL_ARTIFACT_ARCHIVE}" \
+            KERNEL_CONFIG_FRAGMENT="${KERNEL_CONFIG_FRAGMENT:-}" \
             DTB_NAME="$DTB_NAME" \
             bash scripts/ci/build-y700-kernel-artifacts.sh
 

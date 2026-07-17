@@ -16,7 +16,10 @@ Environment inputs:
   KERNEL_SOURCE_REPOSITORY      default: https://github.com/GUF296/linux.git
   KERNEL_SOURCE_REF             default: 5df8e852ea722929f5359a5ef28ebcec0c4443fd
   KERNEL_BASE_CONFIG_ARCHIVE    required URL/path containing kernel.config
+  KERNEL_CONFIG_FRAGMENT        optional local Kconfig fragment applied after required features
   KERNEL_BUILD_JOBS             default: number of online processors
+  KERNEL_CCACHE_DIR             optional persistent ccache directory
+  KERNEL_CCACHE_MAXSIZE         default: 4G
   CROSS_COMPILE                 default: aarch64-linux-gnu-
   DTB_NAME                      default: sm8650-lenovo-tb321fu.dtb
 
@@ -39,11 +42,16 @@ OUTPUT_DIR=${OUTPUT_DIR:-out/y700-kernel-artifacts}
 KERNEL_SOURCE_REPOSITORY=${KERNEL_SOURCE_REPOSITORY:-https://github.com/GUF296/linux.git}
 KERNEL_SOURCE_REF=${KERNEL_SOURCE_REF:-5df8e852ea722929f5359a5ef28ebcec0c4443fd}
 KERNEL_BASE_CONFIG_ARCHIVE=${KERNEL_BASE_CONFIG_ARCHIVE:-}
+KERNEL_CONFIG_FRAGMENT=${KERNEL_CONFIG_FRAGMENT:-}
+kernel_config_fragment_source=$KERNEL_CONFIG_FRAGMENT
 KERNEL_BUILD_JOBS=${KERNEL_BUILD_JOBS:-$(nproc)}
+KERNEL_CCACHE_DIR=${KERNEL_CCACHE_DIR:-}
+KERNEL_CCACHE_MAXSIZE=${KERNEL_CCACHE_MAXSIZE:-4G}
 CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-}
 DTB_NAME=${DTB_NAME:-sm8650-lenovo-tb321fu.dtb}
 
 [ -n "$KERNEL_BASE_CONFIG_ARCHIVE" ] || ci_die "KERNEL_BASE_CONFIG_ARCHIVE is required"
+[ -z "$KERNEL_CONFIG_FRAGMENT" ] || [ -f "$KERNEL_CONFIG_FRAGMENT" ] || ci_die "KERNEL_CONFIG_FRAGMENT does not exist: $KERNEL_CONFIG_FRAGMENT"
 case "$KERNEL_BUILD_JOBS" in
   ''|*[!0-9]*) ci_die "KERNEL_BUILD_JOBS must be a positive integer" ;;
   0) ci_die "KERNEL_BUILD_JOBS must be greater than zero" ;;
@@ -52,6 +60,17 @@ esac
 ci_require_cmd "${CROSS_COMPILE}gcc"
 ci_require_cmd "${CROSS_COMPILE}ld"
 
+kernel_cc=${CROSS_COMPILE}gcc
+if [ -n "$KERNEL_CCACHE_DIR" ]; then
+  ci_require_cmd ccache
+  mkdir -p "$KERNEL_CCACHE_DIR"
+  KERNEL_CCACHE_DIR=$(ci_abs_path "$KERNEL_CCACHE_DIR")
+  export CCACHE_DIR=$KERNEL_CCACHE_DIR
+  export CCACHE_COMPILERCHECK=content
+  ccache --max-size "$KERNEL_CCACHE_MAXSIZE"
+  kernel_cc="ccache $kernel_cc"
+fi
+
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR=$(ci_abs_path "$OUTPUT_DIR")
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/y700-kernel-build.XXXXXX")
@@ -59,6 +78,11 @@ source_dir="$work_dir/linux"
 build_dir="$work_dir/build"
 base_config_dir="$work_dir/base-config"
 payload_dir="$work_dir/payload"
+
+if [ -n "$KERNEL_CCACHE_DIR" ]; then
+  export CCACHE_BASEDIR=$work_dir
+  export CCACHE_NOHASHDIR=true
+fi
 
 cleanup() {
   rm -rf "$work_dir"
@@ -133,6 +157,19 @@ esac
   --enable SQUASHFS_LZO \
   --set-str LSM "$lsm_list"
 
+kernel_config_fragment_sha256=
+if [ -n "$KERNEL_CONFIG_FRAGMENT" ]; then
+  KERNEL_CONFIG_FRAGMENT=$(ci_abs_path "$KERNEL_CONFIG_FRAGMENT")
+  kernel_config_fragment_sha256=$(sha256sum "$KERNEL_CONFIG_FRAGMENT")
+  kernel_config_fragment_sha256=${kernel_config_fragment_sha256%% *}
+  ci_log "merging kernel configuration fragment: $KERNEL_CONFIG_FRAGMENT"
+  "$source_dir/scripts/kconfig/merge_config.sh" \
+    -m \
+    -O "$build_dir" \
+    "$build_dir/.config" \
+    "$KERNEL_CONFIG_FRAGMENT"
+fi
+
 commit_epoch=$(git -C "$source_dir" show -s --format=%ct HEAD)
 export SOURCE_DATE_EPOCH=$commit_epoch
 export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@$commit_epoch" '+%a %b %d %T UTC %Y')"
@@ -144,10 +181,12 @@ make_args=(
   O="$build_dir"
   ARCH=arm64
   CROSS_COMPILE="$CROSS_COMPILE"
+  CC="$kernel_cc"
 )
 
 ci_log "normalizing kernel configuration"
 make "${make_args[@]}" olddefconfig
+lsm_list=$(sed -n 's/^CONFIG_LSM="\(.*\)"$/\1/p' "$build_dir/.config" | head -n1)
 
 grep -qx 'CONFIG_ANDROID_BINDER_IPC=y' "$build_dir/.config" || ci_die "Android Binder IPC was not enabled by Kconfig"
 grep -qx 'CONFIG_ANDROID_BINDERFS=y' "$build_dir/.config" || ci_die "Android BinderFS was not enabled by Kconfig"
@@ -191,6 +230,10 @@ grep -q '^CONFIG_LSM="[^"]*apparmor[^"]*"$' "$build_dir/.config" || ci_die "AppA
 ci_log "building arm64 Image and $DTB_NAME with $KERNEL_BUILD_JOBS jobs"
 make -j"$KERNEL_BUILD_JOBS" "${make_args[@]}" Image "qcom/$DTB_NAME"
 
+if [ -n "$KERNEL_CCACHE_DIR" ]; then
+  ccache --show-stats || true
+fi
+
 kernel_image="$build_dir/arch/arm64/boot/Image"
 dtb_file="$build_dir/arch/arm64/boot/dts/qcom/$DTB_NAME"
 [ -s "$kernel_image" ] || ci_die "kernel Image was not produced"
@@ -215,6 +258,9 @@ kernel_release=$kernel_release
 cross_compile=$CROSS_COMPILE
 build_jobs=$KERNEL_BUILD_JOBS
 base_config_archive=$KERNEL_BASE_CONFIG_ARCHIVE
+config_fragment=$kernel_config_fragment_source
+config_fragment_sha256=$kernel_config_fragment_sha256
+ccache_enabled=$([ -n "$KERNEL_CCACHE_DIR" ] && printf yes || printf no)
 waydroid_config_android_binder_ipc=y
 waydroid_config_android_binderfs=y
 waydroid_config_android_binder_devices=binder,hwbinder,vndbinder

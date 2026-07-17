@@ -1,0 +1,10 @@
+# TB321FU kernel configuration overrides.
+#
+# Add normal Kconfig fragment entries here, for example:
+#   CONFIG_EXAMPLE_FEATURE=y
+#   # CONFIG_EXAMPLE_DEBUG is not set
+#
+# The verified Snap/Waydroid requirements are applied first. If this fragment
+# overrides one of those requirements, the kernel build stops during validation.
+# Keep storage, filesystem, display and other boot-critical device drivers built
+# into the Image (=y): the direct GRUB boot path does not load an initramfs.

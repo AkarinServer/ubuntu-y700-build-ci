@@ -6,9 +6,10 @@ The repository is intentionally structured as a standard source-driven build pip
 
 ## Workflow
 
-Primary workflow:
+Workflows:
 
-- `.github/workflows/build-rootfs-and-grub.yml`
+- `.github/workflows/build-rootfs-and-grub.yml`: full rootfs, kernel and GRUB build.
+- `.github/workflows/build-kernel-and-grub.yml`: fast kernel plus `grub.img.7z` build without rebuilding rootfs.
 
 The workflow exposes common dispatch inputs directly in the GitHub Actions UI, including output prefix, Ubuntu mirror, image sizes, rootfs labels, default user settings, sudo mode, and optional GDM autologin.
 
@@ -21,6 +22,29 @@ It also keeps three optional advanced override inputs:
 - `source_config`: optional input artifact URL overrides as `KEY=value` lines.
 
 Leave the advanced override inputs empty for the built-in verified defaults. If an advanced override input is filled, its `KEY=value` lines are appended after the built-in defaults and before the common UI fields are applied.
+
+## Fast Kernel And GRUB Workflow
+
+Use **Build Kernel And GRUB** in the Actions UI when changing only the kernel configuration or kernel source. This workflow builds `Image` and the TB321FU DTB, injects them into the verified FAT/GRUB template, and uploads an artifact containing:
+
+- `grub.img.7z`
+- `SHA256SUMS.txt`
+- the intermediate kernel artifact archive containing `Image`, DTB, `kernel.config`, and build metadata
+
+It does not run debootstrap, provision a desktop, build device rootfs packages, create an ext4 rootfs image, or compress a rootfs image. The existing rootfs remains selected through `ROOT_PARTLABEL=userdata` by default.
+
+Edit `configs/y700-kernel.config.fragment` for normal kernel configuration experiments:
+
+```text
+CONFIG_EXAMPLE_FEATURE=y
+# CONFIG_EXAMPLE_DEBUG is not set
+```
+
+The fragment is merged over the verified base configuration. Required Snap/Waydroid settings are validated after Kconfig normalization, so accidentally disabling one fails the build instead of producing a misleading artifact. Boot-critical storage, filesystem, display, and device drivers must remain built in with `=y`; this direct GRUB path has no initramfs. A feature configured as `=m` also requires its matching module to be installed under `/lib/modules/<kernel-release>` in the existing rootfs.
+
+The kernel-only workflow uses two cache levels. An exact source/config match restores the completed kernel archive; a changed fragment restores the closest `ccache` state and recompiles only what cannot be reused. The final Actions artifact is uploaded without another compression pass because `grub.img.7z` is already compressed.
+
+When `release_tag` is set, the kernel-only workflow creates the Release if needed or replaces only `grub.img.7z` plus its entry in `SHA256SUMS.txt`. It never deletes existing `boot.img.7z` or rootfs assets.
 
 ## Rootfs Config
 
@@ -100,6 +124,7 @@ KERNEL_SOURCE_REPOSITORY=https://github.com/GUF296/linux.git
 KERNEL_SOURCE_REF=5df8e852ea722929f5359a5ef28ebcec0c4443fd
 KERNEL_BUILD_JOBS=4
 KERNEL_BASE_CONFIG_ARCHIVE=
+KERNEL_CONFIG_FRAGMENT=configs/y700-kernel.config.fragment
 KERNEL_ARTIFACT_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-kernel-artifacts-7.1.1-g5df8e852ea72.tar.gz
 BOOTAA64_EFI_URL=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/BOOTAA64.EFI
 QCOMRAMP_EFI_URL=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/QCOMRAMP-CONFIGFILE.EFI
