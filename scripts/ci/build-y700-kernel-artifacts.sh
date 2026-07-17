@@ -178,6 +178,21 @@ esac
   --module IP6_NF_MANGLE \
   --module IP6_NF_RAW \
   --module IP6_NF_MATCH_RPFILTER \
+  --enable NF_TABLES \
+  --enable NF_TABLES_INET \
+  --enable NFT_CT \
+  --enable NFT_CHAIN_NAT \
+  --enable NFT_MASQ \
+  --enable NFT_REJECT \
+  --enable NFT_REJECT_INET \
+  --enable NFT_COMPAT \
+  --enable NFT_LOG \
+  --enable NFT_LIMIT \
+  --enable NFT_COUNTER \
+  --enable IP_ADVANCED_ROUTER \
+  --enable IP_MULTIPLE_TABLES \
+  --enable IPV6_MULTIPLE_TABLES \
+  --enable FIB_RULES \
   --enable BRIDGE \
   --enable BRIDGE_NETFILTER \
   --enable VETH \
@@ -276,6 +291,21 @@ grep -qx 'CONFIG_IP6_NF_TARGET_REJECT=m' "$build_dir/.config" || ci_die "IPv6 RE
 grep -qx 'CONFIG_IP6_NF_MANGLE=m' "$build_dir/.config" || ci_die "IPv6 mangle table required by Android netd was not configured as a module"
 grep -qx 'CONFIG_IP6_NF_RAW=m' "$build_dir/.config" || ci_die "IPv6 raw table required by Android netd was not configured as a module"
 grep -qx 'CONFIG_IP6_NF_MATCH_RPFILTER=m' "$build_dir/.config" || ci_die "IPv6 rpfilter match required by Android netd was not configured as a module"
+grep -qx 'CONFIG_NF_TABLES=y' "$build_dir/.config" || ci_die "nf_tables framework required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NF_TABLES_INET=y' "$build_dir/.config" || ci_die "nf_tables inet family required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NFT_CT=y' "$build_dir/.config" || ci_die "nftables conntrack expression required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NFT_CHAIN_NAT=y' "$build_dir/.config" || ci_die "nftables NAT chain required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NFT_MASQ=y' "$build_dir/.config" || ci_die "nftables masquerade expression required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NFT_REJECT=y' "$build_dir/.config" || ci_die "nftables reject expression required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NFT_REJECT_INET=y' "$build_dir/.config" || ci_die "nftables inet reject expression required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NFT_COMPAT=y' "$build_dir/.config" || ci_die "nftables x_tables compatibility required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NFT_LOG=y' "$build_dir/.config" || ci_die "nftables logging expression required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NFT_LIMIT=y' "$build_dir/.config" || ci_die "nftables limit expression required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NFT_COUNTER=y' "$build_dir/.config" || ci_die "nftables counter expression required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_IP_ADVANCED_ROUTER=y' "$build_dir/.config" || ci_die "advanced router support required by Android netd policy routing was not built into the kernel"
+grep -qx 'CONFIG_IP_MULTIPLE_TABLES=y' "$build_dir/.config" || ci_die "policy routing required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_IPV6_MULTIPLE_TABLES=y' "$build_dir/.config" || ci_die "IPv6 policy routing required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_FIB_RULES=y' "$build_dir/.config" || ci_die "fib policy rules required by Android netd were not built into the kernel"
 grep -qx 'CONFIG_BRIDGE=y' "$build_dir/.config" || ci_die "Ethernet bridge support was not built into the kernel"
 grep -qx 'CONFIG_BRIDGE_NETFILTER=y' "$build_dir/.config" || ci_die "bridge netfilter support was not built into the kernel"
 grep -qx 'CONFIG_VETH=y' "$build_dir/.config" || ci_die "virtual Ethernet pair support was not built into the kernel"
