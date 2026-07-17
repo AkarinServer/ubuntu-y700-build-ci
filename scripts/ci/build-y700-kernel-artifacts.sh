@@ -25,7 +25,8 @@ Environment inputs:
 
 The base configuration is preserved except for enabling the AppArmor and
 SquashFS features required by Snap, plus Binder, BinderFS, memfd, namespaces,
-cgroups, PSI, bridge/veth networking, and legacy iptables NAT for Waydroid containers.
+cgroups, PSI, bridge/veth networking, and the built-in legacy iptables/XFRM
+features required by the Waydroid host and Android netd.
 USAGE
 }
 
@@ -139,13 +140,36 @@ esac
   --enable NF_CONNTRACK \
   --enable NF_DEFRAG_IPV4 \
   --enable NF_NAT \
+  --enable XFRM_USER \
+  --enable NETFILTER_NETLINK_LOG \
+  --enable NF_CT_NETLINK \
+  --enable NETFILTER_XT_MARK \
+  --enable NETFILTER_XT_CONNMARK \
   --enable NETFILTER_XT_TARGET_CHECKSUM \
   --enable NETFILTER_XT_TARGET_MASQUERADE \
+  --enable NETFILTER_XT_TARGET_NFLOG \
+  --enable NETFILTER_XT_TARGET_TCPMSS \
+  --enable NETFILTER_XT_MATCH_BPF \
+  --enable NETFILTER_XT_MATCH_COMMENT \
   --enable NETFILTER_XT_MATCH_CONNTRACK \
+  --enable NETFILTER_XT_MATCH_LIMIT \
+  --enable NETFILTER_XT_MATCH_OWNER \
+  --enable NETFILTER_XT_MATCH_POLICY \
+  --enable NETFILTER_XT_MATCH_SOCKET \
+  --enable NETFILTER_XT_MATCH_STATE \
   --enable IP_NF_IPTABLES \
   --enable IP_NF_FILTER \
+  --enable IP_NF_TARGET_REJECT \
   --enable IP_NF_NAT \
   --enable IP_NF_MANGLE \
+  --enable IP_NF_RAW \
+  --enable IP6_NF_IPTABLES_LEGACY \
+  --enable IP6_NF_IPTABLES \
+  --enable IP6_NF_FILTER \
+  --enable IP6_NF_TARGET_REJECT \
+  --enable IP6_NF_MANGLE \
+  --enable IP6_NF_RAW \
+  --enable IP6_NF_MATCH_RPFILTER \
   --enable BRIDGE \
   --enable BRIDGE_NETFILTER \
   --enable VETH \
@@ -207,14 +231,40 @@ grep -qx 'CONFIG_NETFILTER_XTABLES_LEGACY=y' "$build_dir/.config" || ci_die "leg
 grep -qx 'CONFIG_IP_NF_IPTABLES_LEGACY=y' "$build_dir/.config" || ci_die "legacy IPv4 iptables support required by Waydroid was not built into the kernel"
 grep -qx 'CONFIG_NF_CONNTRACK=y' "$build_dir/.config" || ci_die "netfilter connection tracking was not built into the kernel"
 grep -qx 'CONFIG_NF_DEFRAG_IPV4=y' "$build_dir/.config" || ci_die "IPv4 netfilter defragmentation was not built into the kernel"
+grep -qx 'CONFIG_NF_DEFRAG_IPV6=y' "$build_dir/.config" || ci_die "IPv6 netfilter defragmentation was not built into the kernel"
 grep -qx 'CONFIG_NF_NAT=y' "$build_dir/.config" || ci_die "netfilter NAT was not built into the kernel"
+grep -qx 'CONFIG_XFRM=y' "$build_dir/.config" || ci_die "XFRM support required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_XFRM_USER=y' "$build_dir/.config" || ci_die "XFRM userspace interface required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_NETLINK=y' "$build_dir/.config" || ci_die "netfilter netlink support was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_NETLINK_LOG=y' "$build_dir/.config" || ci_die "netfilter NFLOG interface required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NF_CT_NETLINK=y' "$build_dir/.config" || ci_die "conntrack netlink support required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_MARK=y' "$build_dir/.config" || ci_die "iptables mark match and MARK target were not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_CONNMARK=y' "$build_dir/.config" || ci_die "iptables connmark match and CONNMARK target were not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_XT_TARGET_CHECKSUM=y' "$build_dir/.config" || ci_die "iptables CHECKSUM target was not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y' "$build_dir/.config" || ci_die "iptables MASQUERADE target was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_TARGET_NFLOG=y' "$build_dir/.config" || ci_die "iptables NFLOG target required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_TARGET_TCPMSS=y' "$build_dir/.config" || ci_die "iptables TCPMSS target required by Android networking was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_BPF=y' "$build_dir/.config" || ci_die "iptables BPF match required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_COMMENT=y' "$build_dir/.config" || ci_die "iptables comment match required by Android networking was not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y' "$build_dir/.config" || ci_die "iptables conntrack match was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_LIMIT=y' "$build_dir/.config" || ci_die "iptables limit match required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_OWNER=y' "$build_dir/.config" || ci_die "iptables owner match required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_POLICY=y' "$build_dir/.config" || ci_die "iptables IPsec policy match required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_SOCKET=y' "$build_dir/.config" || ci_die "iptables socket match required by Android networking was not built into the kernel"
+grep -qx 'CONFIG_NETFILTER_XT_MATCH_STATE=y' "$build_dir/.config" || ci_die "iptables state match required by Android networking was not built into the kernel"
 grep -qx 'CONFIG_IP_NF_IPTABLES=y' "$build_dir/.config" || ci_die "IPv4 iptables was not built into the kernel"
 grep -qx 'CONFIG_IP_NF_FILTER=y' "$build_dir/.config" || ci_die "IPv4 iptables filter table was not built into the kernel"
+grep -qx 'CONFIG_IP_NF_TARGET_REJECT=y' "$build_dir/.config" || ci_die "IPv4 iptables REJECT target was not built into the kernel"
 grep -qx 'CONFIG_IP_NF_NAT=y' "$build_dir/.config" || ci_die "IPv4 iptables NAT table was not built into the kernel"
 grep -qx 'CONFIG_IP_NF_MANGLE=y' "$build_dir/.config" || ci_die "IPv4 iptables mangle table was not built into the kernel"
+grep -qx 'CONFIG_IP_NF_RAW=y' "$build_dir/.config" || ci_die "IPv4 iptables raw table required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_IP6_NF_IPTABLES_LEGACY=y' "$build_dir/.config" || ci_die "legacy IPv6 iptables support required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_IP6_NF_IPTABLES=y' "$build_dir/.config" || ci_die "IPv6 iptables was not built into the kernel"
+grep -qx 'CONFIG_IP6_NF_FILTER=y' "$build_dir/.config" || ci_die "IPv6 iptables filter table was not built into the kernel"
+grep -qx 'CONFIG_IP6_NF_TARGET_REJECT=y' "$build_dir/.config" || ci_die "IPv6 iptables REJECT target was not built into the kernel"
+grep -qx 'CONFIG_IP6_NF_MANGLE=y' "$build_dir/.config" || ci_die "IPv6 iptables mangle table was not built into the kernel"
+grep -qx 'CONFIG_IP6_NF_RAW=y' "$build_dir/.config" || ci_die "IPv6 iptables raw table required by Android netd was not built into the kernel"
+grep -qx 'CONFIG_IP6_NF_MATCH_RPFILTER=y' "$build_dir/.config" || ci_die "IPv6 reverse-path filter match required by Android networking was not built into the kernel"
 grep -qx 'CONFIG_BRIDGE=y' "$build_dir/.config" || ci_die "Ethernet bridge support was not built into the kernel"
 grep -qx 'CONFIG_BRIDGE_NETFILTER=y' "$build_dir/.config" || ci_die "bridge netfilter support was not built into the kernel"
 grep -qx 'CONFIG_VETH=y' "$build_dir/.config" || ci_die "virtual Ethernet pair support was not built into the kernel"
