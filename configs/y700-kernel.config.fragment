@@ -8,3 +8,11 @@
 # overrides one of those requirements, the kernel build stops during validation.
 # Keep storage, filesystem, display and other boot-critical device drivers built
 # into the Image (=y): the direct GRUB boot path does not load an initramfs.
+
+# The DRM_MSM Adreno driver registers its GPU devfreq with the simple_ondemand
+# governor, but a6xx_gpu_busy() reads a GMU CX power counter whose countable
+# selection and IFPC reset behavior make busy_time sample as ~0 on this SoC.
+# simple_ondemand therefore pins the GPU at the lowest OPP, causing freezes
+# under load. Enable the performance governor so the GPU can be switched to a
+# fixed high OPP via devfreq sysfs until the busy counter source is fixed.
+CONFIG_DEVFREQ_GOV_PERFORMANCE=y
