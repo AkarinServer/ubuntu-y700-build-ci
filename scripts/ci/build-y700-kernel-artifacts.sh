@@ -8,7 +8,8 @@ usage() {
   cat <<USAGE
 Usage: $(basename "$0")
 
-Build Lenovo TB321FU kernel artifacts with the kernel features required by Snap.
+Build Lenovo TB321FU kernel artifacts with the kernel features required by Snap
+and Waydroid.
 
 Environment inputs:
   OUTPUT_DIR                    default: out/y700-kernel-artifacts
@@ -19,9 +20,9 @@ Environment inputs:
   CROSS_COMPILE                 default: aarch64-linux-gnu-
   DTB_NAME                      default: sm8650-lenovo-tb321fu.dtb
 
-The base configuration is preserved except for enabling AppArmor, adding
-AppArmor to CONFIG_LSM, and enabling SquashFS XZ/Zstandard/LZO decompression
-with xattr support.
+The base configuration is preserved except for enabling the AppArmor and
+SquashFS features required by Snap, plus Binder, BinderFS, memfd, namespaces,
+cgroups, and PSI for Waydroid containers.
 USAGE
 }
 
@@ -94,6 +95,18 @@ case ",$lsm_list," in
 esac
 
 "$source_dir/scripts/config" --file "$build_dir/.config" \
+  --enable ANDROID_BINDER_IPC \
+  --enable ANDROID_BINDERFS \
+  --set-str ANDROID_BINDER_DEVICES "binder,hwbinder,vndbinder" \
+  --enable MEMFD_CREATE \
+  --enable NAMESPACES \
+  --enable UTS_NS \
+  --enable IPC_NS \
+  --enable USER_NS \
+  --enable PID_NS \
+  --enable NET_NS \
+  --enable CGROUPS \
+  --enable PSI \
   --enable SECURITY_APPARMOR \
   --enable SQUASHFS \
   --enable SQUASHFS_XATTR \
@@ -118,6 +131,18 @@ make_args=(
 ci_log "normalizing kernel configuration"
 make "${make_args[@]}" olddefconfig
 
+grep -qx 'CONFIG_ANDROID_BINDER_IPC=y' "$build_dir/.config" || ci_die "Android Binder IPC was not enabled by Kconfig"
+grep -qx 'CONFIG_ANDROID_BINDERFS=y' "$build_dir/.config" || ci_die "Android BinderFS was not enabled by Kconfig"
+grep -qx 'CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"' "$build_dir/.config" || ci_die "Android Binder device list is incorrect"
+grep -qx 'CONFIG_MEMFD_CREATE=y' "$build_dir/.config" || ci_die "memfd_create support was not enabled"
+grep -qx 'CONFIG_NAMESPACES=y' "$build_dir/.config" || ci_die "namespace support was not enabled"
+grep -qx 'CONFIG_UTS_NS=y' "$build_dir/.config" || ci_die "UTS namespace support was not enabled"
+grep -qx 'CONFIG_IPC_NS=y' "$build_dir/.config" || ci_die "IPC namespace support was not enabled"
+grep -qx 'CONFIG_USER_NS=y' "$build_dir/.config" || ci_die "user namespace support was not enabled"
+grep -qx 'CONFIG_PID_NS=y' "$build_dir/.config" || ci_die "PID namespace support was not enabled"
+grep -qx 'CONFIG_NET_NS=y' "$build_dir/.config" || ci_die "network namespace support was not enabled"
+grep -qx 'CONFIG_CGROUPS=y' "$build_dir/.config" || ci_die "cgroup support was not enabled"
+grep -qx 'CONFIG_PSI=y' "$build_dir/.config" || ci_die "pressure stall information was not enabled"
 grep -qx 'CONFIG_SECURITY_APPARMOR=y' "$build_dir/.config" || ci_die "AppArmor was not enabled by Kconfig"
 grep -qx 'CONFIG_SECURITY_NETWORK=y' "$build_dir/.config" || ci_die "AppArmor networking hooks were not enabled"
 grep -qx 'CONFIG_SECURITY_PATH=y' "$build_dir/.config" || ci_die "AppArmor path hooks were not enabled"
@@ -154,6 +179,13 @@ kernel_release=$kernel_release
 cross_compile=$CROSS_COMPILE
 build_jobs=$KERNEL_BUILD_JOBS
 base_config_archive=$KERNEL_BASE_CONFIG_ARCHIVE
+waydroid_config_android_binder_ipc=y
+waydroid_config_android_binderfs=y
+waydroid_config_android_binder_devices=binder,hwbinder,vndbinder
+waydroid_config_memfd_create=y
+waydroid_config_namespaces=y
+waydroid_config_cgroups=y
+waydroid_config_psi=y
 snap_config_security_apparmor=y
 snap_config_lsm=$lsm_list
 snap_config_squashfs_xattr=y

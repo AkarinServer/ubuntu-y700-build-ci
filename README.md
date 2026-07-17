@@ -111,7 +111,7 @@ DTB_NAME=sm8650-lenovo-tb321fu.dtb
 ## Scripts
 
 - `scripts/ci/build-rootfs-image.sh`: builds an ext4 rootfs image from debootstrap plus declared overlays/debs.
-- `scripts/ci/build-y700-kernel-artifacts.sh`: rebuilds the verified TB321FU kernel commit with AppArmor and SquashFS XZ/Zstandard support for Snap.
+- `scripts/ci/build-y700-kernel-artifacts.sh`: rebuilds the verified TB321FU kernel commit with the AppArmor and SquashFS features required by Snap, plus Binder/BinderFS and container features for Waydroid.
 - `scripts/ci/build-grub-image.sh`: builds a FAT boot image containing BOOTAA64.EFI, a prebuilt or generated QCOMRAMP.EFI, Image, DTB and GRUB config.
 - `scripts/ci/build-tb321fu-camera-stack-deb.sh`: builds the live-verified TB321FU camera stack deb from `source/tb321fu-camera-rootfs-overlay` or an explicit camera overlay archive.
 - `scripts/ci/pack-disk-image.sh`: optional GPT disk image packer for a FAT boot image plus ext4 rootfs image.
@@ -134,13 +134,13 @@ The release notes include the rootfs, boot and source config used for that build
 
 New releases created by the workflow are normal GitHub Releases, not prereleases.
 
-## GNOME And Snap
+## GNOME, Snap, And Waydroid
 
 The default rootfs uses the Ubuntu GNOME session with GDM and enables Snap support through `snapd`, AppArmor, GNOME Software, and the GNOME Software Snap plugin. Snap applications are installed after the device boots; the rootfs builder does not attempt to run the Snap daemon inside the provisioning chroot.
 
-The bootstrap kernel artifact supplies the verified TB321FU base configuration. By default, the workflow fetches the exact matching public source commit from `GUF296/linux`, enables `CONFIG_SECURITY_APPARMOR=y`, `CONFIG_SQUASHFS_XZ=y`, and `CONFIG_SQUASHFS_ZSTD=y`, adds `apparmor` to `CONFIG_LSM`, and rebuilds `Image` plus the TB321FU DTB. GRUB is then packaged with this rebuilt kernel instead of the bootstrap binary. The kernel archive and its checksums are included in the Actions artifact.
+The bootstrap kernel artifact supplies the verified TB321FU base configuration. By default, the workflow fetches the exact matching public source commit from `GUF296/linux`, enables `CONFIG_SECURITY_APPARMOR=y`, the required SquashFS decompressors, Android Binder IPC and BinderFS, memfd, namespaces, cgroups, and PSI, then rebuilds `Image` plus the TB321FU DTB. GRUB is packaged with this rebuilt kernel instead of the bootstrap binary. The kernel archive, normalized configuration, build metadata, and checksums are included in the Actions artifact.
 
-Set `BUILD_Y700_KERNEL=0` in `source_config` only when intentionally supplying a replacement `KERNEL_ARTIFACT_ARCHIVE` that already has the required Snap kernel features.
+Set `BUILD_Y700_KERNEL=0` in `source_config` only when intentionally supplying a replacement `KERNEL_ARTIFACT_ARCHIVE` that already has the required Snap and Waydroid kernel features.
 
 The rootfs builder removes KDE-only KWin, Plasma Keyboard, and Plasma workspace configuration after all external device debs are installed. The KDE-only KSystemStats GPU plugin is disabled for GNOME builds.
 

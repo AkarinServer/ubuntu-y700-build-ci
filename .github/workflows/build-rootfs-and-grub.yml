@@ -409,7 +409,7 @@ jobs:
             bash scripts/ci/build-y700-sensor-debs.sh
           echo 'Y700_SENSOR_DEB_DIR=out/y700-sensor-debs' >> "$GITHUB_ENV"
 
-      - name: Restore Snap-capable kernel artifacts
+      - name: Restore Snap/Waydroid-capable kernel artifacts
         if: env.BUILD_Y700_KERNEL == '1'
         id: kernel-artifact-cache
         continue-on-error: true
@@ -418,7 +418,7 @@ jobs:
           path: out/y700-kernel-artifacts
           key: y700-kernel-${{ runner.arch }}-${{ steps.build-cache-meta.outputs.kernel }}-${{ hashFiles('scripts/ci/build-y700-kernel-artifacts.sh', '.github/workflows/build-rootfs-and-grub.yml') }}
 
-      - name: Build Snap-capable kernel artifacts
+      - name: Build Snap/Waydroid-capable kernel artifacts
         if: env.BUILD_Y700_KERNEL == '1' && steps.kernel-artifact-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
@@ -431,7 +431,7 @@ jobs:
             DTB_NAME="$DTB_NAME" \
             bash scripts/ci/build-y700-kernel-artifacts.sh
 
-      - name: Save Snap-capable kernel artifacts
+      - name: Save Snap/Waydroid-capable kernel artifacts
         if: env.BUILD_Y700_KERNEL == '1' && steps.kernel-artifact-cache.outcome == 'success' && steps.kernel-artifact-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@v5
