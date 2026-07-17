@@ -20,15 +20,13 @@ Environment inputs:
   KERNEL_BUILD_JOBS             default: number of online processors
   KERNEL_CCACHE_DIR             optional persistent ccache directory
   KERNEL_CCACHE_MAXSIZE         default: 4G
-  KERNEL_IMAGE_LOAD_LIMIT       exclusive ARM64 Image load-size limit, default: 58720256 (56 MiB)
   CROSS_COMPILE                 default: aarch64-linux-gnu-
   DTB_NAME                      default: sm8650-lenovo-tb321fu.dtb
 
 The base configuration is preserved except for enabling the AppArmor and
 SquashFS features required by Snap, plus Binder, BinderFS, memfd, namespaces,
-cgroups, PSI, bridge/veth networking, and the built-in legacy iptables/XFRM
-features required by the Waydroid host and Android netd. KALLSYMS_ALL is
-disabled to keep the direct-boot Image below the QCOMRAMP load boundary.
+cgroups, PSI, bridge/veth networking, and the legacy iptables features that do
+not change the ABI of the kernel modules already installed in the rootfs.
 USAGE
 }
 
@@ -37,7 +35,7 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   exit 0
 fi
 
-for cmd in git make tar sha256sum sed grep nproc find install date od tr; do
+for cmd in git make tar sha256sum sed grep nproc find install date; do
   ci_require_cmd "$cmd"
 done
 
@@ -50,7 +48,6 @@ kernel_config_fragment_source=$KERNEL_CONFIG_FRAGMENT
 KERNEL_BUILD_JOBS=${KERNEL_BUILD_JOBS:-$(nproc)}
 KERNEL_CCACHE_DIR=${KERNEL_CCACHE_DIR:-}
 KERNEL_CCACHE_MAXSIZE=${KERNEL_CCACHE_MAXSIZE:-4G}
-KERNEL_IMAGE_LOAD_LIMIT=${KERNEL_IMAGE_LOAD_LIMIT:-58720256}
 CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-}
 DTB_NAME=${DTB_NAME:-sm8650-lenovo-tb321fu.dtb}
 
@@ -59,10 +56,6 @@ DTB_NAME=${DTB_NAME:-sm8650-lenovo-tb321fu.dtb}
 case "$KERNEL_BUILD_JOBS" in
   ''|*[!0-9]*) ci_die "KERNEL_BUILD_JOBS must be a positive integer" ;;
   0) ci_die "KERNEL_BUILD_JOBS must be greater than zero" ;;
-esac
-case "$KERNEL_IMAGE_LOAD_LIMIT" in
-  ''|*[!0-9]*) ci_die "KERNEL_IMAGE_LOAD_LIMIT must be a positive integer in bytes" ;;
-  0) ci_die "KERNEL_IMAGE_LOAD_LIMIT must be greater than zero" ;;
 esac
 
 ci_require_cmd "${CROSS_COMPILE}gcc"
@@ -147,11 +140,9 @@ esac
   --enable NF_CONNTRACK \
   --enable NF_DEFRAG_IPV4 \
   --enable NF_NAT \
-  --enable XFRM_USER \
   --enable NETFILTER_NETLINK_LOG \
   --enable NF_CT_NETLINK \
   --enable NETFILTER_XT_MARK \
-  --enable NETFILTER_XT_CONNMARK \
   --enable NETFILTER_XT_TARGET_CHECKSUM \
   --enable NETFILTER_XT_TARGET_MASQUERADE \
   --enable NETFILTER_XT_TARGET_NFLOG \
@@ -161,7 +152,6 @@ esac
   --enable NETFILTER_XT_MATCH_CONNTRACK \
   --enable NETFILTER_XT_MATCH_LIMIT \
   --enable NETFILTER_XT_MATCH_OWNER \
-  --enable NETFILTER_XT_MATCH_POLICY \
   --enable NETFILTER_XT_MATCH_SOCKET \
   --enable NETFILTER_XT_MATCH_STATE \
   --enable IP_NF_IPTABLES \
@@ -180,7 +170,6 @@ esac
   --enable BRIDGE \
   --enable BRIDGE_NETFILTER \
   --enable VETH \
-  --disable KALLSYMS_ALL \
   --enable SECURITY_APPARMOR \
   --enable SQUASHFS \
   --enable SQUASHFS_XATTR \
@@ -241,13 +230,15 @@ grep -qx 'CONFIG_NF_CONNTRACK=y' "$build_dir/.config" || ci_die "netfilter conne
 grep -qx 'CONFIG_NF_DEFRAG_IPV4=y' "$build_dir/.config" || ci_die "IPv4 netfilter defragmentation was not built into the kernel"
 grep -qx 'CONFIG_NF_DEFRAG_IPV6=y' "$build_dir/.config" || ci_die "IPv6 netfilter defragmentation was not built into the kernel"
 grep -qx 'CONFIG_NF_NAT=y' "$build_dir/.config" || ci_die "netfilter NAT was not built into the kernel"
-grep -qx 'CONFIG_XFRM=y' "$build_dir/.config" || ci_die "XFRM support required by Android netd was not built into the kernel"
-grep -qx 'CONFIG_XFRM_USER=y' "$build_dir/.config" || ci_die "XFRM userspace interface required by Android netd was not built into the kernel"
+if grep -qx 'CONFIG_XFRM=y' "$build_dir/.config"; then
+  ci_die "XFRM changes the ABI of struct sock and struct net; rebuild and install all rootfs modules before enabling it"
+fi
+grep -qx '# CONFIG_XFRM_USER is not set' "$build_dir/.config" || ci_die "XFRM_USER must remain disabled while using the bootstrap rootfs modules"
+grep -qx '# CONFIG_NF_CONNTRACK_MARK is not set' "$build_dir/.config" || ci_die "NF_CONNTRACK_MARK changes the nf_conn module ABI and requires rebuilding the rootfs modules"
 grep -qx 'CONFIG_NETFILTER_NETLINK=y' "$build_dir/.config" || ci_die "netfilter netlink support was not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_NETLINK_LOG=y' "$build_dir/.config" || ci_die "netfilter NFLOG interface required by Android netd was not built into the kernel"
 grep -qx 'CONFIG_NF_CT_NETLINK=y' "$build_dir/.config" || ci_die "conntrack netlink support required by Android netd was not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_XT_MARK=y' "$build_dir/.config" || ci_die "iptables mark match and MARK target were not built into the kernel"
-grep -qx 'CONFIG_NETFILTER_XT_CONNMARK=y' "$build_dir/.config" || ci_die "iptables connmark match and CONNMARK target were not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_XT_TARGET_CHECKSUM=y' "$build_dir/.config" || ci_die "iptables CHECKSUM target was not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y' "$build_dir/.config" || ci_die "iptables MASQUERADE target was not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_XT_TARGET_NFLOG=y' "$build_dir/.config" || ci_die "iptables NFLOG target required by Android netd was not built into the kernel"
@@ -257,7 +248,6 @@ grep -qx 'CONFIG_NETFILTER_XT_MATCH_COMMENT=y' "$build_dir/.config" || ci_die "i
 grep -qx 'CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y' "$build_dir/.config" || ci_die "iptables conntrack match was not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_XT_MATCH_LIMIT=y' "$build_dir/.config" || ci_die "iptables limit match required by Android netd was not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_XT_MATCH_OWNER=y' "$build_dir/.config" || ci_die "iptables owner match required by Android netd was not built into the kernel"
-grep -qx 'CONFIG_NETFILTER_XT_MATCH_POLICY=y' "$build_dir/.config" || ci_die "iptables IPsec policy match required by Android netd was not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_XT_MATCH_SOCKET=y' "$build_dir/.config" || ci_die "iptables socket match required by Android networking was not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_XT_MATCH_STATE=y' "$build_dir/.config" || ci_die "iptables state match required by Android networking was not built into the kernel"
 grep -qx 'CONFIG_IP_NF_IPTABLES=y' "$build_dir/.config" || ci_die "IPv4 iptables was not built into the kernel"
@@ -297,17 +287,6 @@ dtb_file="$build_dir/arch/arm64/boot/dts/qcom/$DTB_NAME"
 [ -s "$kernel_image" ] || ci_die "kernel Image was not produced"
 [ -s "$dtb_file" ] || ci_die "$DTB_NAME was not produced"
 
-arm64_image_magic=$(od -An -tx1 -j56 -N4 "$kernel_image" | tr -d '[:space:]')
-[ "$arm64_image_magic" = 41524d64 ] || ci_die "kernel Image does not contain a valid ARM64 Image header"
-arm64_image_load_size=$(od -An -tu8 -j16 -N8 "$kernel_image" | tr -d '[:space:]')
-case "$arm64_image_load_size" in
-  ''|*[!0-9]*) ci_die "could not read the load size from the ARM64 Image header" ;;
-esac
-ci_log "ARM64 Image load size: $arm64_image_load_size bytes; QCOMRAMP limit: less than $KERNEL_IMAGE_LOAD_LIMIT bytes"
-if (( arm64_image_load_size >= KERNEL_IMAGE_LOAD_LIMIT )); then
-  ci_die "ARM64 Image load size $arm64_image_load_size reaches or exceeds the QCOMRAMP direct-boot limit $KERNEL_IMAGE_LOAD_LIMIT"
-fi
-
 kernel_release=$(make -s "${make_args[@]}" kernelrelease)
 kernel_describe=$(git -C "$source_dir" describe --always --dirty --tags)
 archive_name="y700-kernel-artifacts-${kernel_release}-snap.tar.gz"
@@ -330,9 +309,6 @@ base_config_archive=$KERNEL_BASE_CONFIG_ARCHIVE
 config_fragment=$kernel_config_fragment_source
 config_fragment_sha256=$kernel_config_fragment_sha256
 ccache_enabled=$([ -n "$KERNEL_CCACHE_DIR" ] && printf yes || printf no)
-arm64_image_load_size=$arm64_image_load_size
-arm64_image_load_limit=$KERNEL_IMAGE_LOAD_LIMIT
-kallsyms_all=$(grep -qx 'CONFIG_KALLSYMS_ALL=y' "$build_dir/.config" && printf y || printf n)
 waydroid_config_android_binder_ipc=y
 waydroid_config_android_binderfs=y
 waydroid_config_android_binder_devices=binder,hwbinder,vndbinder

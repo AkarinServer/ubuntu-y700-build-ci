@@ -1,0 +1,19 @@
+[Unit]
+Description=Y700 USB ECM debug network
+Wants=sys-kernel-config.mount
+After=local-fs.target sys-kernel-config.mount systemd-modules-load.service NetworkManager.service
+Before=ssh.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/y700-usb-debug start
+ExecStop=/usr/local/sbin/y700-usb-debug stop
+TimeoutStartSec=45s
+TimeoutStopSec=15s
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
