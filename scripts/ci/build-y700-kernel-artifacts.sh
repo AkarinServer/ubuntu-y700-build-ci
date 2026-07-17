@@ -111,6 +111,7 @@ esac
   --enable NETFILTER_ADVANCED \
   --enable NETFILTER_XTABLES \
   --enable NETFILTER_XTABLES_LEGACY \
+  --enable IP_NF_IPTABLES_LEGACY \
   --enable NF_CONNTRACK \
   --enable NF_DEFRAG_IPV4 \
   --enable NF_NAT \
@@ -164,6 +165,7 @@ grep -qx 'CONFIG_NETFILTER=y' "$build_dir/.config" || ci_die "netfilter support 
 grep -qx 'CONFIG_NETFILTER_ADVANCED=y' "$build_dir/.config" || ci_die "advanced netfilter support was not enabled"
 grep -qx 'CONFIG_NETFILTER_XTABLES=y' "$build_dir/.config" || ci_die "x_tables support was not built into the kernel"
 grep -qx 'CONFIG_NETFILTER_XTABLES_LEGACY=y' "$build_dir/.config" || ci_die "legacy x_tables support required by Waydroid was not built into the kernel"
+grep -qx 'CONFIG_IP_NF_IPTABLES_LEGACY=y' "$build_dir/.config" || ci_die "legacy IPv4 iptables support required by Waydroid was not built into the kernel"
 grep -qx 'CONFIG_NF_CONNTRACK=y' "$build_dir/.config" || ci_die "netfilter connection tracking was not built into the kernel"
 grep -qx 'CONFIG_NF_DEFRAG_IPV4=y' "$build_dir/.config" || ci_die "IPv4 netfilter defragmentation was not built into the kernel"
 grep -qx 'CONFIG_NF_NAT=y' "$build_dir/.config" || ci_die "netfilter NAT was not built into the kernel"
